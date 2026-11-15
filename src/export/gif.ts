@@ -1,12 +1,13 @@
 /**
  * Poster to GIF. Renders the poster loop frame by frame (the same frames as the MP4 and PNG exports), builds one 256-colour
  * palette for the whole loop so colours do not flicker between frames, and encodes with gifenc, a tiny pure-JS encoder.
- * The GIF is smaller than the MP4 (600 x 600 at 20 fps) so it stays a sensible size to put in a README.
+ * The GIF is smaller than the MP4 (720 x 720 at 20 fps) so it stays a sensible size to put in a README. It is rendered at that
+ * size directly, not shrunk from 1080, so the characters stay crisp.
  */
 import { GIFEncoder, quantize, applyPalette } from "gifenc";
 import type { Garden } from "../engine/garden";
 
-export const GIF_SIZE = 600;
+export const GIF_SIZE = 720;
 export const GIF_FPS = 20;
 
 /** Lets the page repaint (progress text) between heavy steps. */
@@ -16,16 +17,11 @@ export async function exportGif(g: Garden) {
   if (g.state.busy || !g.P) return;
   const size = GIF_SIZE, fps = GIF_FPS;
   const frames = Math.max(2, Math.round((g.P.T / 1000) * fps));
-  const surface = g.exportSurface();
-  const small = document.createElement("canvas");
-  small.width = small.height = size;
-  const sg = small.getContext("2d", { willReadFrequently: true })!;
-  sg.imageSmoothingEnabled = true;
-  sg.imageSmoothingQuality = "high";
-  /** Frame i of the loop, scaled down, as RGBA pixels. */
+  const surface = g.exportSurface(size); // drawn at `size` directly
+  const sg = surface.canvas.getContext("2d", { willReadFrequently: true })!;
+  /** Frame i of the loop as RGBA pixels. */
   const grab = (i: number) => {
     g.drawPoster(surface, (i * 1000) / fps);
-    sg.drawImage(surface.canvas, 0, 0, size, size);
     return sg.getImageData(0, 0, size, size).data;
   };
 

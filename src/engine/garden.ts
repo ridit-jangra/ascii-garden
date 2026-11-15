@@ -117,7 +117,10 @@ const KIND_WEIGHT: Record<string, number> = { rose: 3, tulip: 2, daisy: 2, poppy
 /** Size tweak per species so they sit well on a stem. */
 const KIND_SCALE: Record<string, number> = { rose: 1, tulip: 1.25, daisy: 1.25, poppy: 1.2, blossom: 1.3, lily: 1.3, bell: 1.2, lavender: 1.05, fern: 1.05, dandelion: 1.25, coral: 1.2, anemone: 1.15, jellyfish: 1.2, kelp: 1, quartz: 1.2, cluster: 1.1, gem: 1 };
 
-const POSTER_CELL = { cw: 7, ch: 10 };
+/** The smallest character height (px) that still draws as a glyph. Smaller cells collapse into flat pixels, which looks wrong. */
+const MIN_CHAR = 5;
+/** Live view floors: below these the glyphs turn into unreadable pixel blobs (long text shrinks the type, and the cells with it). */
+const MIN_CHAR_TEXT = 8, MIN_CHAR_FLOWER = 6;
 
 /**
  * Vector mode is switched off for now. When a layer's cell size is below this, it is drawn as real vector art instead of
@@ -526,15 +529,16 @@ export class Garden {
     this.applyCell();
   }
   /** Bigger type gets bigger characters; wrapped type gets finer ones so letters stay readable. */
-  targetCh() { return clamp(((this.St || this.H * 0.28) / 17) * this.cellScale, 2, 18); }
-  targetChT() { return clamp(((this.St || this.H * 0.28) / 17) * this.textScale, 2, 22); }
+  targetCh() { return clamp(((this.St || this.H * 0.28) / 17) * this.cellScale, MIN_CHAR_FLOWER, 18); }
+  targetChT() { return clamp(((this.St || this.H * 0.28) / 17) * this.textScale, MIN_CHAR_TEXT, 22); }
   /** Scales the flowers' character size: below 1 is finer and more detailed, above 1 is chunkier. */
   setCellScale(v: number) { this.cellScale = clamp(v, MIN_CELL, 1.8); if (this.surface && this.W) { this.chCur = this.targetCh(); this.applyCell(); } this.applyPosterCells(); }
   /** The same for the type, on its own: the letters can be fine while the flowers are chunky, or the other way round. */
   setTextScale(v: number) { this.textScale = clamp(v, MIN_CELL, 1.8); if (this.surface && this.W) { this.chCurT = this.targetChT(); this.applyCell(); } this.applyPosterCells(); }
   /** [flower cw, flower ch, text cw, text ch] for the 1080 poster. */
   posterCells() {
-    const f = Math.max(2, Math.round(POSTER_CELL.ch * this.cellScale)), t = Math.max(2, Math.round(POSTER_CELL.ch * this.textScale));
+    const S = this.P ? this.P.S : 280; // the poster's letter size, as St is for the Type view
+    const f = Math.max(MIN_CHAR, Math.round((S / 17) * this.cellScale)), t = Math.max(MIN_CHAR, Math.round((S / 17) * this.textScale));
     return [Math.max(1, Math.round(f / 1.43)), f, Math.max(1, Math.round(t / 1.43)), t] as const;
   }
   applyPosterCells() { if (this.pSurface) this.pSurface.resize(1080, 1080, 1, ...this.posterCells()); }
@@ -1390,6 +1394,7 @@ export class Garden {
     const k = Math.min(1.25, half / Math.max(1, bcx - x0, x1 - bcx), half / Math.max(1, bcy - y0, y1 - bcy));
     L.forEach(l => { l.tx = Z / 2 + (l.tx - bcx) * k; l.ty = Z / 2 + (l.ty - bcy) * k; l.tw *= k; l.x = l.tx; l.y = l.ty; });
     this.P = { letters: L, S: S * k, T: pr.T, preset: pr.id };
+    this.applyPosterCells();
     this.pt0 = performance.now();
   }
   posterFly(B: any, tt: number, P: any, C: any) {
@@ -1506,12 +1511,23 @@ export class Garden {
     this.dl(new Blob([this.surface.toSVG()], { type: "image/svg+xml" }), "garden.svg");
   }
   fname() { return "garden-" + (this.state.text || "loop").trim().replace(/[^a-z0-9]+/gi, "-").toLowerCase().slice(0, 24) + "-" + this.state.preset; }
-  exportSurface() {
+  /**
+   * A surface to render the poster into at `px` x `px` (the poster is always laid out in 1080 x 1080 units). Smaller exports are
+   * drawn at their own size rather than shrunk afterwards, which would smear the characters; the characters are kept at least
+   * MIN_CHAR pixels tall at that size so they stay readable.
+   */
+  exportSurface(px = 1080) {
     const c = document.createElement("canvas");
     const s = new LayeredSurface(c);
     s.setGrid(false); // same as the preview
     s.setRoles(this.roles());
-    s.resize(1080, 1080, 1, ...this.posterCells());
+    const dpr = px / 1080;
+    const [fcw, fch, tcw, tch] = this.posterCells();
+    const floor = Math.ceil(MIN_CHAR / dpr);
+    const fit = (ch: number): [number, number] => { const h = Math.max(ch, floor); return [Math.max(1, Math.round(h / 1.43)), h]; };
+    const [a, b] = fit(fch), [c2, d] = fit(tch);
+    void fcw; void tcw;
+    s.resize(1080, 1080, dpr, a, b, c2, d);
     return s;
   }
   setBusy(b: boolean, status: string) { this.state.busy = b; this.cb.onBusy(b); this.cb.onStatus(status); }

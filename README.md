@@ -34,7 +34,7 @@ Also built on the work of others:
 Two ways, both from the Type tab:
 
 - **Record it live**: press **● GIF** (or **● MP4**), type `ASCII Garden` and watch it bloom, then press **■ Stop**. It captures just the garden, as you made it.
-- **Export a clean loop**: type your words, pick a motion preset in Tweaks (**Typed** types, cuts and repeats; **Grow & wither** blooms and fades), then **Export ▾ → GIF loop**. It renders a 600 x 600, 20 fps loop. The same menu also makes a 1080 x 1080 **MP4** and **PNG frames**.
+- **Export a clean loop**: type your words, pick a motion preset in Tweaks (**Typed** types, cuts and repeats; **Grow & wither** blooms and fades), then **Export ▾ → GIF loop**. It renders a 720 x 720, 20 fps loop. The same menu also makes a 1080 x 1080 **MP4** and **PNG frames**.
 
 The Poster tab has the same exports. Save the GIF as `docs/demo.gif`.
 

@@ -391,7 +391,7 @@ export default function App() {
       )}
       <div className="menu-title">{mode === "type" ? "Loop · preset in Tweaks" : "Loop"}</div>
       {menuItem(videoName, "1080 × 1080 video of the words growing", () => exportLoop("mp4"))}
-      {menuItem("GIF", "600 × 600, small enough for a README", () => exportLoop("gif"))}
+      {menuItem("GIF", "720 × 720, small enough for a README", () => exportLoop("gif"))}
       {menuItem("PNG frames", "every frame, as a .zip", () => exportLoop("frames"))}
       <div className="menu-title">Code</div>
       {menuItem("React / HTML", "copy-paste, no dependencies", () => { setMenuOpen(false); openExport(); })}
