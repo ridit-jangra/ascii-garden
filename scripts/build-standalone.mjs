@@ -11,6 +11,7 @@ await build({
   globalName: "TypeGardenAscii",
   target: "es2019",
   legalComments: "none",
+  external: ["gifenc"], // only the app's GIF export uses it; the embed never does
   outfile: "src/standalone/engine.min.js",
   logLevel: "warning",
 });

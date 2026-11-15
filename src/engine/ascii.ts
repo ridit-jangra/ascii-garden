@@ -312,6 +312,8 @@ export class AsciiSurface {
     const data = this.mg.getImageData(0, 0, w, h).data;
     flag.fill(CELL_NONE);
     const N = SXn * SYn;
+    // thresholds are fractions of the samples in a cell: tiny cells only have a couple of samples, so fixed counts dropped them all
+    const minHits = Math.max(1, Math.round(N * 0.125)), secHits = Math.max(1, Math.round(N * 0.17));
     const bg = roles[0];
     const [bgR, bgG, bgB] = bg;
     const rr = roles;
@@ -334,7 +336,7 @@ export class AsciiSurface {
         }
         let total = 0;
         for (let k = 1; k < nr; k++) total += an[k];
-        if (total < 3) continue;
+        if (total < minHits) continue;
         let dom = 1;
         for (let k = 2; k < nr; k++) if (an[k] > an[dom]) dom = k;
         const domFam = fam[dom];
@@ -352,12 +354,13 @@ export class AsciiSurface {
         if (solid) {
           // a second family in the cell, e.g. a flower's swirl line over its petals
           let sec = 0;
-          for (let k = 1; k < nr; k++) if (fam[k] !== domFam && an[k] >= 4 && (sec === 0 || an[k] > an[sec])) sec = k;
+          for (let k = 1; k < nr; k++) if (fam[k] !== domFam && an[k] >= secHits && (sec === 0 || an[k] > an[sec])) sec = k;
           let fillC: RGB;
           let glyphC: RGB;
           let ch0: string;
           if (domFam === 4) {
-            fillC = mix(base, bg, 0.82);
+            // tiny cells draw as flat blocks (no glyph), so type must use its full colour there, not the dim block behind a glyph
+            fillC = mix(base, bg, ch < 5 ? 0.03 : 0.82);
             glyphC = base;
           } else {
             // highlights stay bright, shadows sink a little into the background

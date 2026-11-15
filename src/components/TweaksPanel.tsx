@@ -76,10 +76,12 @@ interface Props {
   onReset: () => void;
   /** Small line at the bottom of the panel (the credit). */
   footer?: ReactNode;
+  /** Called with the panel's open state (so the garden can keep clear of it). */
+  onOpenChange?: (open: boolean) => void;
 }
 
 /** The Tweaks menu, ported from ascii-animals: a liquid-glass panel of grouped sliders, switches and custom rows. */
-export default function TweaksPanel({ groups, exportJSON, onReset, footer }: Props) {
+export default function TweaksPanel({ groups, exportJSON, onReset, footer, onOpenChange }: Props) {
   const [open, setOpen] = useState(readOpen);
   const [tip, setTip] = useState<Tip | null>(null);
   const [copyLabel, setCopyLabel] = useState("Copy");
@@ -100,6 +102,8 @@ export default function TweaksPanel({ groups, exportJSON, onReset, footer }: Pro
     gsap.ticker.add(raf);
     return () => { gsap.ticker.remove(raf); lenis.destroy(); };
   }, [open]);
+
+  useEffect(() => { onOpenChange?.(open); }, [open]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const changeOpen = (next: boolean) => {
     setOpen(next);

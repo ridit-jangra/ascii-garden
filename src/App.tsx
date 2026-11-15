@@ -2,12 +2,14 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, typ
 import gsap from "gsap";
 import { Ascii } from "ascii.rest/react";
 import * as cherryBlossom from "ascii.rest/pieces/cherry-blossom";
-import { Garden, PAL, PRESETS, FLOWERS, THEMES, THEMES_ENABLED, defaultKindColor, type Mode } from "./engine/garden";
+import { Garden, PAL, PRESETS, FLOWERS, THEMES, THEMES_ENABLED, defaultKindColor, renderKindPreview, type Mode } from "./engine/garden";
 import CodeExport from "./export/CodeExport";
+import { exportGif } from "./export/gif";
+import { startRecording, type Recording, type Clip } from "./export/record";
 import LiquidGlassFilter from "./components/LiquidGlassFilter";
 import GlassChoices from "./components/GlassChoices";
 import TweaksPanel, { type Group } from "./components/TweaksPanel";
-import { GLASS, KNOB_DEFAULTS, MIN_CELL, loadSaved, save } from "./tweaks";
+import { GLASS, KNOB_DEFAULTS, MIN_CELL, OPEN_KEY, loadSaved, save } from "./tweaks";
 
 const ALL = FLOWERS.map((f) => f.id);
 const MODES = [{ value: "type", label: "Type" }, { value: "poster", label: "Poster" }];
@@ -32,7 +34,48 @@ const hoverSoft = {
   onPointerLeave: (e: React.PointerEvent<HTMLElement>) => { gsap.to(e.currentTarget, { y: 0, duration: 0.45, ease: "elastic.out(1, 0.5)", overwrite: "auto" }); },
 };
 
+/**
+ * Smooth hovers for every button-like control: GSAP fades the background and text colour (and nudges menu items)
+ * instead of snapping. Selected and primary buttons keep their own look.
+ */
+function useHoverFade() {
+  useEffect(() => {
+    const SEL = ".export-menu button, .pill, .tool, .tweaks-action, .tweaks-close, .btn, .x-close, .x-tab";
+    const root = document.documentElement;
+    const css = (v: string) => getComputedStyle(root).getPropertyValue(v).trim();
+    const find = (t: EventTarget | null) => (t as HTMLElement | null)?.closest?.(SEL) as HTMLElement | null;
+    const skip = (el: HTMLElement) => (el as HTMLButtonElement).disabled || el.matches(".on, .primary, .solid, .confirm, .menu-discard");
+    /** The same colour fully transparent, so fading in from "no background" does not pass through black. */
+    const clear = (c: string) => c.replace(/rgba?\(([^)]*)\)/, (_m, inner) => { const [r, g, b] = inner.split(",").map((x: string) => x.trim()); return `rgba(${r}, ${g}, ${b}, 0)`; });
+    const over = (e: PointerEvent) => {
+      const el = find(e.target);
+      if (!el || skip(el) || (e.relatedTarget && el.contains(e.relatedTarget as Node))) return;
+      const cs = getComputedStyle(el);
+      if (!el.dataset.rest) el.dataset.rest = cs.backgroundColor + "|" + cs.color;
+      const hover = css("--chip-hover");
+      if (/,\s*0\)$/.test(cs.backgroundColor) || cs.backgroundColor === "transparent") gsap.set(el, { backgroundColor: clear(hover) });
+      gsap.to(el, { backgroundColor: hover, color: css("--text"), ...(el.matches(".export-menu button") ? { x: 3 } : {}), duration: 0.28, ease: "power2.out", overwrite: "auto" });
+    };
+    const out = (e: PointerEvent) => {
+      const el = find(e.target);
+      if (!el || (e.relatedTarget && el.contains(e.relatedTarget as Node))) return;
+      const rest = el.dataset.rest;
+      if (!rest) return;
+      const [bg, color] = rest.split("|");
+      const toBg = /,\s*0\)$/.test(bg) || bg === "transparent" ? clear(css("--chip-hover")) : bg;
+      gsap.to(el, {
+        backgroundColor: toBg, color, ...(el.matches(".export-menu button") ? { x: 0 } : {}), duration: 0.4, ease: "power2.out", overwrite: "auto",
+        onComplete: () => { gsap.set(el, { clearProps: "backgroundColor,color,x" }); delete el.dataset.rest; },
+      });
+    };
+    document.addEventListener("pointerover", over);
+    document.addEventListener("pointerout", out);
+    return () => { document.removeEventListener("pointerover", over); document.removeEventListener("pointerout", out); };
+  }, []);
+}
+
 export default function App() {
+  useHoverFade();
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const garden = useRef<Garden | null>(null);
@@ -58,8 +101,18 @@ export default function App() {
   const [status, setStatus] = useState("");
   const [count, setCount] = useState(0);
   const [videoLabel, setVideoLabel] = useState("Export loop");
+  // recording the live Type tab as MP4 or GIF
+  const [rec, setRec] = useState<{ sec: number } | null>(null);
+  const [clip, setClip] = useState<Clip | null>(null); // a finished recording waiting for MP4 or GIF
+  const [recMsg, setRecMsg] = useState("");
+  const recRef = useRef<Recording | null>(null);
+  const lastStatus = useRef("");
+  const [menuOpen, setMenuOpen] = useState(false);
+  const chevRef = useRef<SVGSVGElement>(null);
+  // while the Tweaks panel is open the garden is centred in the space beside it, so nothing slides underneath
+  const [panelOpen, setPanelOpen] = useState(() => { try { return localStorage.getItem(OPEN_KEY) !== "0"; } catch { return true; } });
   const [exportOpen, setExportOpen] = useState(false);
-  const [exportText, setExportText] = useState("in bloom");
+  const [exportText, setExportText] = useState("ASCII Garden");
 
   const row = PAL[palette];
   const bg = row[1], accent = row[2], fg = row[5];
@@ -68,7 +121,7 @@ export default function App() {
 
   // engine lifetime
   useEffect(() => {
-    const g = new Garden(canvasRef.current!, inputRef.current!, { onStatus: setStatus, onBusy: setBusy, onCount: setCount, onText: setTyped });
+    const g = new Garden(canvasRef.current!, inputRef.current!, { onStatus: (s) => { lastStatus.current = s; setStatus(s); }, onBusy: setBusy, onCount: setCount, onText: setTyped });
     garden.current = g;
     g.setTheme(initTheme.id);
     g.setFlowers(initFlowers);
@@ -168,8 +221,76 @@ export default function App() {
     setMode(m);
   };
 
+  const stopRec = useCallback(async () => {
+    const r = recRef.current;
+    if (!r) return;
+    recRef.current = null;
+    setRec(null);
+    setMenuOpen(false);
+    setRecMsg("Processing…");
+    try {
+      const out = await r.stop();
+      if (typeof out === "string") setRecMsg(out);
+      else { setRecMsg(""); setClip(out); } // now they choose MP4 or GIF
+    } catch (err) { console.error(err); setRecMsg("Recording failed."); }
+  }, []);
+  const toggleRec = () => {
+    const g = garden.current; if (!g) return;
+    if (recRef.current) { void stopRec(); return; }
+    setClip(null); setMenuOpen(false); setRecMsg("");
+    recRef.current = startRecording(g, (sec) => setRec({ sec }), () => void stopRec());
+    setRec({ sec: 0 });
+    g.refocus(); // keep typing: keys go to the garden, not the button
+  };
+  const saveClip = async (kind: "video" | "gif") => {
+    const c = clip; if (!c) return;
+    setClip(null);
+    if (kind === "video") setRecMsg(c.saveVideo());
+    else { setRecMsg("Encoding GIF 0%"); setRecMsg(await c.saveGif((p) => setRecMsg(`Encoding GIF ${p}%`))); }
+    window.setTimeout(() => setRecMsg(""), 6000);
+    garden.current?.refocus();
+  };
+  // leaving the Type tab ends a recording and drops an unsaved clip (it only captures the Type view)
+  useEffect(() => { if (mode !== "type") { if (recRef.current) void stopRec(); setClip(null); } }, [mode, stopRec]);
+  useEffect(() => {
+    if (!clip) return;
+    const key = (e: KeyboardEvent) => { if (e.key === "Escape") setClip(null); };
+    window.addEventListener("keydown", key);
+    return () => window.removeEventListener("keydown", key);
+  }, [clip]);
+
+  /**
+   * The normal export, from the Type tab: the words on the garden become the same clean 1080 x 1080 loop the Poster tab
+   * makes (with the chosen motion preset), as an MP4, a GIF or PNG frames.
+   */
+  const exportLoop = async (kind: "mp4" | "gif" | "frames") => {
+    const g = garden.current;
+    if (!g || g.state.busy) return;
+    setMenuOpen(false);
+    setRecMsg("");
+    if (mode === "type") g.setPoster({ text: g.liveText() || pText, preset, seed }); // the Poster tab already has its own words
+    if (kind === "mp4") await g.exportVideo();
+    else if (kind === "gif") await exportGif(g);
+    else await g.exportFrames();
+    setRecMsg(lastStatus.current);
+    window.setTimeout(() => setRecMsg(""), 6000);
+  };
+  // GSAP: the chevron points up (the menu opens above the dock) and turns to point down while it is open
+  useEffect(() => {
+    if (chevRef.current) gsap.to(chevRef.current, { rotation: menuOpen ? 180 : 0, duration: 0.3, ease: "power3.out" });
+  }, [menuOpen]);
+  // close the Export menu on outside click or Escape
+  useEffect(() => {
+    if (!menuOpen) return;
+    const down = (e: PointerEvent) => { if (!(e.target as HTMLElement).closest(".export-menu, .export-btn")) setMenuOpen(false); };
+    const key = (e: KeyboardEvent) => { if (e.key === "Escape") setMenuOpen(false); };
+    window.addEventListener("pointerdown", down);
+    window.addEventListener("keydown", key);
+    return () => { window.removeEventListener("pointerdown", down); window.removeEventListener("keydown", key); };
+  }, [menuOpen]);
+
   const openExport = () => {
-    setExportText(mode === "poster" ? pText : garden.current?.liveText() || "in bloom");
+    setExportText(mode === "poster" ? pText : garden.current?.liveText() || "ASCII Garden");
     setExportOpen(true);
   };
   const closeExport = useCallback(() => { setExportOpen(false); garden.current?.refocus(); }, []);
@@ -214,6 +335,9 @@ export default function App() {
       ),
     }]]);
   }
+  if (mode === "type") {
+    groups.push(["Export loop", [{ kind: "node", key: "presets", node: <PresetPicker preset={preset} onPreset={(id) => setPreset(id)} /> }]]);
+  }
   groups.push(["Garden", [
     ...(THEMES_ENABLED ? [{ kind: "node" as const, key: "theme", node: <ThemeSwitch value={theme} onChange={changeTheme} /> }] : []),
     { kind: "range", key: "chaos", label: "Chaos", min: 0, max: 1, step: 0.01, def: KNOB_DEFAULTS.chaos, value: knobs.chaos, set: (v) => setKnob("chaos", v), hint: "From minimal botanical typography to the garden taking over: stems, branches, flower size and leaves all grow with it." },
@@ -255,13 +379,51 @@ export default function App() {
   const exportJSON = () => JSON.stringify({ palette: row[0], flowers, colors, knobs }, null, 2);
   const stop = (e: React.PointerEvent) => e.stopPropagation();
 
+  const menuItem = (title: string, sub: string, onClick: () => void) => (
+    <button key={title} type="button" role="menuitem" onClick={onClick}><b>{title}</b><small>{sub}</small></button>
+  );
+  const videoName = videoLabel.includes("unavailable") ? "Video (unavailable)" : videoLabel.replace(/^Export | loop$/g, "");
+  const exportBtn = (
+    <button type="button" className="pill export-btn" disabled={busy || !!rec} aria-haspopup="menu" aria-expanded={menuOpen} {...hoverTween} onClick={() => setMenuOpen((o) => !o)}>
+      Export
+      <svg ref={chevRef} className="chev" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M6 15l6-6 6 6" /></svg>
+    </button>
+  );
+  // everything you can export lives in this one menu
+  const exportMenu = menuOpen && (
+    <div className="export-menu glass" role="menu" style={{ ["--blur" as any]: "14px" }}>
+      {mode === "type" && (
+        <>
+          <div className="menu-title">Image</div>
+          {menuItem("PNG", "the garden as a picture", () => { setMenuOpen(false); garden.current?.savePNG(); garden.current?.refocus(); })}
+          {menuItem("SVG", "made of text, scales forever", () => { setMenuOpen(false); garden.current?.saveSVG(); garden.current?.refocus(); })}
+        </>
+      )}
+      <div className="menu-title">{mode === "type" ? "Loop · preset in Tweaks" : "Loop"}</div>
+      {menuItem(videoName, "1080 × 1080 video of the words growing", () => exportLoop("mp4"))}
+      {menuItem("GIF", "600 × 600, small enough for a README", () => exportLoop("gif"))}
+      {menuItem("PNG frames", "every frame, as a .zip", () => exportLoop("frames"))}
+      <div className="menu-title">Code</div>
+      {menuItem("React / HTML", "copy-paste, no dependencies", () => { setMenuOpen(false); openExport(); })}
+    </div>
+  );
+  // after you stop recording: save it as video or as a GIF
+  const clipMenu = clip && (
+    <div className="export-menu glass" role="dialog" aria-label="Save recording" style={{ ["--blur" as any]: "14px" }}>
+      <div className="menu-title">Save this {Math.max(1, Math.round(clip.seconds))}s recording as</div>
+      {clip.videoExt && menuItem(clip.videoExt.toUpperCase() + " video", "full quality, plays anywhere", () => saveClip("video"))}
+      {menuItem("GIF", `${clip.gifFrames} frames, loops, great for a README`, () => saveClip("gif"))}
+      <button type="button" className="menu-discard" onClick={() => setClip(null)}>Discard</button>
+    </div>
+  );
+
   return (
     <>
       <LiquidGlassFilter refraction={GLASS.refraction} ripple={GLASS.ripple} />
       <div
         className="app"
         data-tg="app"
-        style={{ background: bg, ["--accent" as any]: accent }}
+        style={{ background: bg, ["--accent" as any]: accent, ["--panel" as any]: panelOpen ? "300px" : "0px" }}
         onPointerDown={(e) => garden.current?.appPointerDown(e)}
         onClick={(e) => garden.current?.appClick(e)}
       >
@@ -309,33 +471,47 @@ export default function App() {
         >
           {mode === "type" ? (
             <>
-              <div className="keys">
-                <span className="fine"><kbd>type</kbd>grow</span><span className="coarse"><kbd>tap</kbd>type</span>
-                <span><kbd>space</kbd>cut</span>
-                <span><kbd>⌫</kbd>wither</span>
-                <span><kbd>↵</kbd>clear</span>
-                <span className="fine"><kbd>2×click</kbd>rose</span>
-              </div>
+              {rec ? (
+                <span className="rec-status"><i className="rec-dot" />Recording {Math.floor(rec.sec / 60)}:{String(Math.floor(rec.sec % 60)).padStart(2, "0")} · type away, then press Stop</span>
+              ) : clip ? (
+                <span className="status">Recording ready · choose a format</span>
+              ) : busy ? (
+                <span className="status">{status}</span>
+              ) : recMsg ? (
+                <span className="status">{recMsg}</span>
+              ) : (
+                <div className="keys">
+                  <span className="fine"><kbd>type</kbd>grow</span><span className="coarse"><kbd>tap</kbd>type</span>
+                  <span><kbd>space</kbd>cut</span>
+                  <span><kbd>⌫</kbd>wither</span>
+                  <span><kbd>↵</kbd>clear</span>
+                  <span className="fine"><kbd>2×click</kbd>rose</span>
+                </div>
+              )}
               <div className="actions">
-                <button type="button" className="pill" {...hoverTween} onClick={() => { garden.current?.savePNG(); garden.current?.refocus(); }}>PNG</button>
-                <button type="button" className="pill" {...hoverTween} onClick={() => { garden.current?.saveSVG(); garden.current?.refocus(); }}>SVG</button>
-                <button type="button" className="pill primary" {...hoverTween} onClick={openExport}>{"</>"} Code</button>
+                <button
+                  type="button" className={"pill rec-btn" + (rec ? " on" : "")} disabled={busy}
+                  title="Record the garden: press, type, then press Stop and choose MP4 or GIF"
+                  {...hoverTween} onClick={toggleRec}
+                >{rec ? "■ Stop" : <><i className="rec-dot-sm" />Record</>}</button>
+                {exportBtn}
+                {clipMenu}
+                {exportMenu}
               </div>
             </>
           ) : (
             <>
               <span className="status" ref={statusRef}>{status || `${(PRESETS.find((x) => x.id === preset)?.T ?? 3000) / 1000}s loop · 1080 × 1080 · 30 fps`}</span>
               <div className="actions">
-                <button type="button" className="pill primary" disabled={busy} {...hoverTween} onClick={() => garden.current?.exportVideo()}>{busy ? "Exporting…" : videoLabel}</button>
-                <button type="button" className="pill" disabled={busy} {...hoverTween} onClick={() => garden.current?.exportFrames()}>PNG frames</button>
-                <button type="button" className="pill" {...hoverTween} onClick={openExport}>{"</>"} Code</button>
+                {exportBtn}
+                {exportMenu}
               </div>
             </>
           )}
         </div>
 
         <TweaksPanel
-          groups={groups} exportJSON={exportJSON} onReset={resetAll}
+          groups={groups} exportJSON={exportJSON} onReset={resetAll} onOpenChange={setPanelOpen}
           footer={<>Based on <a href="https://type-garden.vercel.app/" target="_blank" rel="noopener noreferrer">Type Garden</a> by Akshat Agarwal</>}
         />
       </div>
@@ -357,6 +533,13 @@ function ChaosCaption({ value }: { value: number }) {
     if (label.startsWith("THE")) gsap.fromTo(cap.current, { x: -4 }, { x: 0, duration: 0.6, ease: "elastic.out(1, 0.15)" });
   }, [label]);
   return <div className={"chaos-cap" + (label.startsWith("THE") ? " max" : "")} ref={cap}>{label}</div>;
+}
+
+/** A small drawing of one flower, in its current colour, drawn by the engine itself. */
+function FlowerPreview({ kind, color, line }: { kind: string; color: string; line: string }) {
+  const ref = useRef<HTMLCanvasElement>(null);
+  useEffect(() => { if (ref.current) renderKindPreview(ref.current, kind, color, line, 40); }, [kind, color, line]);
+  return <canvas ref={ref} className="chip-prev" aria-hidden="true" />;
 }
 
 /** Botanical, Ocean or Crystal: what grows out of the letters. */
@@ -392,13 +575,13 @@ function FlowerPicker({ kinds, flowers, colors, row, onToggle, onSolo, onAll, on
           const sel = flowers.includes(f.id);
           const col = colors[f.id] || defaultKindColor(f.id, row);
           return (
-            <span key={f.id} className={"chip" + (sel ? " on" : "")} style={{ ["--c" as any]: col }} {...hoverSoft}>
+            <span key={f.id} className={"chip" + (sel ? " on" : "")} style={{ ["--c" as any]: col }}>
               <button
                 type="button" className="chip-main" aria-pressed={sel}
                 title="Click to add or remove · Shift-click to grow only this one"
                 onClick={(e) => { e.stopPropagation(); if (e.shiftKey) onSolo(f.id); else onToggle(f.id); }}
               >
-                <span className="chip-glyph">{f.glyph}</span>
+                <span className="chip-glyph"><FlowerPreview kind={f.id} color={col} line={row[4]} /></span>
                 <span className="chip-label">{f.label}</span>
               </button>
               <label className="chip-pick" title={`Tweak the ${f.label.toLowerCase()} colour`} onClick={(e) => e.stopPropagation()}>
@@ -421,14 +604,21 @@ function PosterControls(p: { text: string; preset: string; onText: (t: string) =
     <div className="poster-controls">
       <input className="words" value={p.text} spellCheck={false} aria-label="Poster words" onChange={(e) => p.onText(e.target.value)} />
       <button type="button" className="tool" onClick={p.onReshuffle}>Regrow garden</button>
-      <div className="presets">
-        {PRESETS.map((x) => (
-          <button key={x.id} type="button" className={"preset" + (p.preset === x.id ? " on" : "")} onClick={() => p.onPreset(x.id)}>
-            <span>{x.label}</span>
-            <small>{x.sub}</small>
-          </button>
-        ))}
-      </div>
+      <PresetPicker preset={p.preset} onPreset={p.onPreset} />
+    </div>
+  );
+}
+
+/** The motion presets (how the loop moves). Used by the Poster tab and by the Type tab's Export menu. */
+function PresetPicker({ preset, onPreset }: { preset: string; onPreset: (id: string) => void }) {
+  return (
+    <div className="presets">
+      {PRESETS.map((x) => (
+        <button key={x.id} type="button" className={"preset" + (preset === x.id ? " on" : "")} onClick={(e) => { e.stopPropagation(); onPreset(x.id); }}>
+          <span>{x.label}</span>
+          <small>{x.sub}</small>
+        </button>
+      ))}
     </div>
   );
 }

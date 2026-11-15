@@ -144,7 +144,7 @@ export class Garden {
   F = '"Playfair Display",Georgia,serif';
   SENT = String.fromCharCode(0x200b); // kept in the hidden field so Backspace on an empty field still reports
   props = { boil: true, recoil: 20, density: 1 };
-  state = { mode: "type" as Mode, preset: "breathe", palette: 0, text: "in bloom", seed: 7, busy: false, flowers: "mixed" as string[] | string };
+  state = { mode: "type" as Mode, preset: "breathe", palette: 0, text: "ASCII Garden", seed: 7, busy: false, flowers: "mixed" as string[] | string };
 
   constructor(public canvas: HTMLCanvasElement, public input: HTMLInputElement, public cb: Callbacks) {}
 
@@ -178,6 +178,7 @@ export class Garden {
 
     this.onResize = () => this.resize();
     window.addEventListener("resize", this.onResize);
+    if (typeof ResizeObserver !== "undefined") { this.ro = new ResizeObserver(() => this.resize()); this.ro.observe(this.canvas); }
     this.onKey = (e: KeyboardEvent) => this.key(e);
     this.keyTarget.addEventListener("keydown", this.onKey);
     // pointer positions are kept relative to the canvas so the garden also works when it is not at the page origin
@@ -226,6 +227,7 @@ export class Garden {
       ? ["video/mp4;codecs=avc1.42E01E", "video/mp4", "video/webm;codecs=vp9", "video/webm"].find(m => MediaRecorder.isTypeSupported(m)) || null
       : null;
     if (!opts.embed) this.buildPoster();
+    if (/[?&]tgtest/.test(location.search)) (window as any).__tg = this; // debug hook for tests
     this.tick = () => this.frame();
     this.ticker.add(this.tick);
     if (!this.touch && !opts.embed) setTimeout(() => this.input && this.input.focus({ preventScroll: true }), 50);
@@ -234,6 +236,7 @@ export class Garden {
   destroy() {
     if (this.tick && this.ticker) this.ticker.remove(this.tick);
     window.removeEventListener("resize", this.onResize);
+    if (this.ro) this.ro.disconnect();
     if (this.keyTarget) this.keyTarget.removeEventListener("keydown", this.onKey);
     window.removeEventListener("pointermove", this.onMove);
     document.removeEventListener("pointerleave", this.onLeave);
@@ -470,6 +473,7 @@ export class Garden {
       rect: (x: number, y: number, w: number, h: number, col: string) => { g.fillStyle = col; g.fillRect(x, y, w, h); },
       /** Fill with a radial shade: stops are [offset, colour] pairs; the nearest tone decides each cell's glyph density. */
       fillGrad: (p: number[][], cx: number, cy: number, r: number, stops: [number, string][]) => {
+        if (!Number.isFinite(cx) || !Number.isFinite(cy) || !Number.isFinite(r)) return;
         const gr = g.createRadialGradient(cx, cy, 0, cx, cy, Math.max(1, r));
         for (const [o, c] of stops) gr.addColorStop(o, c);
         g.beginPath(); this.path(g, p, true); g.fillStyle = gr; g.fill();
@@ -558,6 +562,22 @@ export class Garden {
       else { if (!cur) cur = { idx: [] }; cur.idx.push(i); }
     });
     if (cur) words.push(cur);
+    // A single long word cannot wrap, so it would just keep shrinking until the letters are unreadable (and drowned by flowers).
+    // Break any word too long for a line at a readable size into chunks, which can sit on separate lines.
+    const limit = maxW / (H * 0.1);
+    for (let wi = 0; wi < words.length; wi++) {
+      const w = words[wi];
+      if (w.sp || w.idx.reduce((t: number, i: number) => t + ws[i], 0) <= limit) continue;
+      const parts: any[] = [];
+      let part: number[] = [], acc = 0;
+      for (const i of w.idx) {
+        if (acc + ws[i] > limit && part.length) { parts.push({ idx: part }); part = []; acc = 0; }
+        part.push(i); acc += ws[i];
+      }
+      if (part.length) parts.push({ idx: part });
+      words.splice(wi, 1, ...parts);
+      wi += parts.length - 1;
+    }
     const lineW = (li: number[], S: number) => { let e = li.length; while (e > 0 && A[li[e-1]].ch === " ") e--; let w = 0; for (let k = 0; k < e; k++) w += ws[li[k]]; return w * S; };
     const wrap = (S: number) => {
       const lines: number[][] = [[]]; let lw = 0;
@@ -1170,7 +1190,12 @@ export class Garden {
   }
 
   // ---------- render (shared by typing view + poster) ----------
+  /** One animation frame. An error in a single frame is logged once and never stops the loop. */
   frame() {
+    try { this.frameInner(); }
+    catch (err) { if (!this._warned) { this._warned = true; console.error("Type Garden: a frame failed (the animation keeps running):", err); } }
+  }
+  frameInner() {
     const now = performance.now(), dt = Math.min(64, now - (this.lt || now)); this.lt = now;
     if (this.state.mode === "poster") {
       if (this.pSurface && !this.state.busy) this.drawPoster(this.pSurface, now - (this.pt0 || 0));
@@ -1546,4 +1571,41 @@ export class Garden {
     e.setUint32(0, 0x06054b50, true); e.setUint16(8, files.length, true); e.setUint16(10, files.length, true); e.setUint32(12, cs, true); e.setUint32(16, off, true);
     return new Blob([...parts, ...cen, e.buffer], { type: "application/zip" });
   }
+}
+
+/** Per species: [flower size as a fraction of the tile, vertical shift as a fraction of the tile], so each one sits centred. */
+const PREVIEW_FIT: Record<string, [number, number]> = {
+  rose: [0.3, 0], tulip: [0.26, 0.07], daisy: [0.36, 0], poppy: [0.34, 0], blossom: [0.36, 0], lily: [0.26, 0.1],
+  bell: [0.34, -0.04], lavender: [0.27, 0.23], fern: [0.26, 0.25], dandelion: [0.36, 0],
+  coral: [0.3, 0.1], anemone: [0.3, 0.05], jellyfish: [0.3, -0.04], kelp: [0.2, 0.18], quartz: [0.28, 0.06], cluster: [0.3, 0.04], gem: [0.34, 0],
+};
+let previewGarden: Garden | null = null;
+
+/**
+ * Draws one fully bloomed flower into a small canvas, for the picker. It uses the engine's own drawing (same shapes and
+ * shading as in the garden) in the flower's current colour, so the preview always matches what will grow.
+ */
+export function renderKindPreview(canvas: HTMLCanvasElement, kind: string, color: string, lineColor: string, size: number) {
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  canvas.width = canvas.height = Math.round(size * dpr);
+  canvas.style.width = canvas.style.height = size + "px";
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, size, size);
+  // one shared engine instance that never starts: it is only used for its drawing methods
+  const g = previewGarden || (previewGarden = new Garden(document.createElement("canvas"), document.createElement("input"), { onStatus() {}, onBusy() {} }));
+  const t = tones(color);
+  g.cc = {
+    red: color, redD: t.dark, redL: t.light, blue: color, blueD: t.dark, blueL: t.light, line: lineColor, text: color, vein: color,
+    kind: { [kind]: { base: color, dark: t.dark, light: t.light } },
+  };
+  g.minLw = 0;
+  g._now = 0;
+  const [r, dy] = PREVIEW_FIT[kind] || [0.3, 0];
+  const R = size * r, cx = size / 2, cy = size / 2 + size * dy;
+  const e = { kind, ph1: 0.3, ph2: 1.7, turns: 2, id: 1 };
+  const B = g.backend(ctx);
+  if (kind === "rose") g.rose(B, cx, cy, R, 0, e, 1e6, null);
+  else g.drawKind(B, (x: number, y: number) => [cx + x, cy + y], R, e, 1e6);
 }

@@ -54,7 +54,7 @@ export function loadSaved(all: string[], paletteCount: number): Saved {
     text: typeof j.text === "string" ? j.text.slice(0, 200) : "",
     mode: j.mode === "poster" ? "poster" : "type",
     poster: {
-      text: typeof j.poster?.text === "string" ? j.poster.text.slice(0, 40) : "in bloom",
+      text: typeof j.poster?.text === "string" ? j.poster.text.slice(0, 40) : "ASCII Garden",
       preset: typeof j.poster?.preset === "string" ? j.poster.preset : "breathe",
       seed: num(j.poster?.seed, 7, 0, 1e9),
     },
