@@ -66,13 +66,6 @@ button { font: inherit; color: inherit; cursor: pointer; -webkit-tap-highlight-c
 button:disabled { opacity: 0.5; cursor: default; }
 svg { display: block; }
 
-/* ascii.rest text pieces need these (React's <Ascii> adds no CSS of its own) */
-.art {
-  margin: 0;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", "ascii.rest mono", monospace;
-  font-size: 12px; line-height: 1.2; letter-spacing: 0; white-space: pre; font-variant-ligatures: none;
-}
-
 .app { position: fixed; inset: 0; cursor: text; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; }
 html[data-touch] .app { touch-action: none; top: var(--tg-top, 0px); bottom: auto; height: var(--tg-h, 100%); }
 /* --panel is the width of the open Tweaks sidebar: the garden lives in the space beside it */
@@ -121,11 +114,6 @@ html[data-touch] .app { touch-action: none; top: var(--tg-top, 0px); bottom: aut
 
 /* ---------- logo: just the daisy ---------- */
 .logo-daisy { position: fixed; z-index: 20; top: 8px; left: 12px; width: 104px; height: 104px; pointer-events: none; }
-.empty {
-  position: absolute; z-index: 2; left: calc((100% - var(--panel, 0px)) / 2); top: 12%; transform: translateX(-50%); pointer-events: none; opacity: 0.85;
-  display: flex; flex-direction: column; align-items: center; gap: 10px;
-}
-.empty-label { font: 500 11px/1 var(--mono); letter-spacing: 0.32em; text-transform: uppercase; color: var(--text); opacity: 0.55; }
 
 /* ---------- bottom dock ---------- */
 .dock {

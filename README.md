@@ -17,7 +17,6 @@ What is different here: everything is re-drawn as ASCII, and the original's comm
 Also built on the work of others:
 
 - **[ascii-animals](https://github.com/DesignerStephen1/ascii-animals)** by drewdi / DesignerStephen1 (MIT): the cell-grid ASCII rendering approach, the liquid-glass filter and the Tweaks panel are adapted from it.
-- **[ascii.rest](https://ascii.rest)**: the cherry blossom on the empty state and the poster butterfly.
 - **[GSAP](https://gsap.com)** (all animation and the frame loop) and **[Lenis](https://lenis.darkroom.engineering)** (smooth scroll).
 - Fonts from Google Fonts: Playfair Display, JetBrains Mono, Geist, Inter and Instrument Serif.
 

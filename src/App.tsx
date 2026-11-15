@@ -1,7 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import gsap from "gsap";
-import { Ascii } from "ascii.rest/react";
-import * as cherryBlossom from "ascii.rest/pieces/cherry-blossom";
 import { Garden, PAL, PRESETS, FLOWERS, THEMES, THEMES_ENABLED, defaultKindColor, renderKindPreview, type Mode } from "./engine/garden";
 import CodeExport from "./export/CodeExport";
 import { exportGif } from "./export/gif";
@@ -79,7 +77,6 @@ export default function App() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const garden = useRef<Garden | null>(null);
-  const emptyRef = useRef<HTMLDivElement>(null);
   const saved = useRef(loadSaved(ALL, PAL.length)).current;
   const posterEl = useRef<HTMLCanvasElement | null>(null);
   // the saved theme and the saved species that belong to it (anything else falls back to the whole theme)
@@ -99,7 +96,6 @@ export default function App() {
   const [seed, setSeed] = useState(saved.poster.seed);
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState("");
-  const [count, setCount] = useState(0);
   const [videoLabel, setVideoLabel] = useState("Export loop");
   // recording the live Type tab as MP4 or GIF
   const [rec, setRec] = useState<{ sec: number } | null>(null);
@@ -121,7 +117,7 @@ export default function App() {
 
   // engine lifetime
   useEffect(() => {
-    const g = new Garden(canvasRef.current!, inputRef.current!, { onStatus: (s) => { lastStatus.current = s; setStatus(s); }, onBusy: setBusy, onCount: setCount, onText: setTyped });
+    const g = new Garden(canvasRef.current!, inputRef.current!, { onStatus: (s) => { lastStatus.current = s; setStatus(s); }, onBusy: setBusy, onText: setTyped });
     garden.current = g;
     g.setTheme(initTheme.id);
     g.setFlowers(initFlowers);
@@ -311,12 +307,6 @@ export default function App() {
     return () => ctx.revert();
   }, [mode]);
 
-  // GSAP: the cherry blossom invites you to type, then leaves once you do
-  useEffect(() => {
-    if (!emptyRef.current) return;
-    gsap.to(emptyRef.current, { opacity: count === 0 && mode === "type" ? 0.85 : 0, y: count === 0 ? 0 : -16, duration: 0.6, ease: "power2.out" });
-  }, [count, mode]);
-
   const statusRef = useRef<HTMLSpanElement>(null);
   useEffect(() => { if (statusRef.current && status) gsap.fromTo(statusRef.current, { opacity: 0 }, { opacity: 1, duration: 0.35 }); }, [status]);
 
@@ -439,13 +429,6 @@ export default function App() {
         {mode === "poster" && (
           <div className="poster-stage">
             <canvas ref={attachPoster} className="pcanvas" width={1080} height={1080} />
-          </div>
-        )}
-
-        {mode === "type" && (
-          <div className="empty" ref={emptyRef} aria-hidden="true">
-            <Ascii piece={cherryBlossom} className="art" style={{ fontSize: "clamp(5px, 0.9vw, 9px)", color: accent }} />
-            <div className="empty-label">start typing</div>
           </div>
         )}
 
