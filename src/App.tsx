@@ -35,8 +35,8 @@ const hoverSoft = {
 };
 
 /**
- * Smooth hovers for every button-like control: GSAP fades the background and text colour (and nudges menu items)
- * instead of snapping. Selected and primary buttons keep their own look.
+ * Smooth hovers for every button-like control: GSAP fades the background and text colour instead of snapping.
+ * Nothing moves; it is a pure colour fade. Selected and primary buttons keep their own look.
  */
 function useHoverFade() {
   useEffect(() => {
@@ -54,7 +54,7 @@ function useHoverFade() {
       if (!el.dataset.rest) el.dataset.rest = cs.backgroundColor + "|" + cs.color;
       const hover = css("--chip-hover");
       if (/,\s*0\)$/.test(cs.backgroundColor) || cs.backgroundColor === "transparent") gsap.set(el, { backgroundColor: clear(hover) });
-      gsap.to(el, { backgroundColor: hover, color: css("--text"), ...(el.matches(".export-menu button") ? { x: 3 } : {}), duration: 0.28, ease: "power2.out", overwrite: "auto" });
+      gsap.to(el, { backgroundColor: hover, color: css("--text"), duration: 0.28, ease: "power2.out", overwrite: "auto" });
     };
     const out = (e: PointerEvent) => {
       const el = find(e.target);
@@ -64,7 +64,7 @@ function useHoverFade() {
       const [bg, color] = rest.split("|");
       const toBg = /,\s*0\)$/.test(bg) || bg === "transparent" ? clear(css("--chip-hover")) : bg;
       gsap.to(el, {
-        backgroundColor: toBg, color, ...(el.matches(".export-menu button") ? { x: 0 } : {}), duration: 0.4, ease: "power2.out", overwrite: "auto",
+        backgroundColor: toBg, color, duration: 0.4, ease: "power2.out", overwrite: "auto",
         onComplete: () => { gsap.set(el, { clearProps: "backgroundColor,color,x" }); delete el.dataset.rest; },
       });
     };
