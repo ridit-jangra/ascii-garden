@@ -6,7 +6,7 @@
  * The frame loop runs on GSAP's ticker.
  */
 import gsap from "gsap";
-import { AsciiSurface, clamp } from "./ascii";
+import { AsciiSurface, clamp, tones } from "./ascii";
 
 export type Mode = "type" | "poster";
 
@@ -41,7 +41,7 @@ export const PAL: string[][] = [
   ["Mono", "#000000", "#F2F2F2", "#6E6E6E", "#000000", "#FFFFFF"],
 ];
 
-const POSTER_CELL = { cw: 8, ch: 12 };
+const POSTER_CELL = { cw: 7, ch: 10 };
 
 export class Garden {
   [key: string]: any;
@@ -312,6 +312,13 @@ export class Garden {
       fill: (p: number[][], col: string) => { g.beginPath(); this.path(g, p, true); g.fillStyle = col; g.fill(); },
       stroke: (p: number[][], col: string, w: number) => { g.beginPath(); this.path(g, p, false); g.strokeStyle = col; g.lineWidth = Math.max(w, this.minLw || 0); g.lineCap = "round"; g.lineJoin = "round"; g.stroke(); },
       rect: (x: number, y: number, w: number, h: number, col: string) => { g.fillStyle = col; g.fillRect(x, y, w, h); },
+      /** Fill with a radial shade: stops are [offset, colour] pairs; the nearest tone decides each cell's glyph density. */
+      fillGrad: (p: number[][], cx: number, cy: number, r: number, stops: [number, string][]) => {
+        const gr = g.createRadialGradient(cx, cy, 0, cx, cy, Math.max(1, r));
+        for (const [o, c] of stops) gr.addColorStop(o, c);
+        g.beginPath(); this.path(g, p, true); g.fillStyle = gr; g.fill();
+      },
+      outline: (p: number[][], col: string, w: number) => { g.beginPath(); this.path(g, p, true); g.strokeStyle = col; g.lineWidth = Math.max(w, this.minLw || 0); g.lineJoin = "round"; g.stroke(); },
       text: (ch: string, x: number, y: number, S: number, col: string) => { g.font = `700 ${S}px ${this.F}`; g.textAlign = "center"; g.textBaseline = "alphabetic"; g.fillStyle = col; g.fillText(ch, x, y); },
     };
   }
@@ -356,7 +363,7 @@ export class Garden {
     this.applyCell();
   }
   /** Bigger type gets bigger characters; wrapped type gets finer ones so letters stay readable. */
-  targetCh() { return clamp((this.St || this.H * 0.28) / 12, 9, 16); }
+  targetCh() { return clamp((this.St || this.H * 0.28) / 17, 7, 12); }
   applyCell() {
     const ch = Math.round(this.chCur), cw = Math.max(6, Math.round(ch / 1.45));
     this.surface.resize(this.W, this.H, this.dpr, cw, ch);
@@ -596,8 +603,14 @@ export class Garden {
     const N = 12, s1: number[][] = [], s2: number[][] = [];
     for (let i = 0; i <= N; i++) { const u = i / N, c = ax(u), w = hw(u); s1.push([c[0] + px * w, c[1] + py * w]); s2.push([c[0] - px * w, c[1] - py * w]); }
     const tip = ax(1), base = ax(0);
-    B.fill([base, ...s1.slice(1, N), tip, tip, ...s2.slice(1, N).reverse(), base], this.cc.blue);
-    // (leaf veins are finer than a character cell, so the ASCII version leaves them out)
+    // two-tone leaf: lit half, shadow half, and a light midrib down the middle
+    B.fill([base, ...s1.slice(1, N), tip], this.cc.blue);
+    B.fill([tip, ...s2.slice(1, N).reverse(), base], this.cc.blueD);
+    if (L > 14) {
+      const rib: number[][] = [];
+      for (let i = 1; i <= 8; i++) rib.push(ax(0.06 + 0.74 * i / 8));
+      B.stroke(rib, this.cc.blueL, Math.max(0.8, L * 0.03));
+    }
   }
   rose(B: any, cx: number, cy: number, R: number, rot: number, e: any, a: number, tl: number[] | null) {
     const cr = Math.cos(rot), sr = Math.sin(rot);
@@ -627,7 +640,14 @@ export class Garden {
         return T((ax0 + (px - ax0) * s) * R, (ay0 + (py - ay0) * s) * R, q[5]);
       };
       const pts: number[][] = []; for (let k = 0; k < 26; k++) pts.push(pt(k / 26 * Math.PI * 2));
-      B.fill(pts, this.cc.red);
+      // shaded petal: back petals fall into shadow at the rim, front petals catch the light
+      let mx = 0, my = 0; for (const q2 of pts) { mx += q2[0]; my += q2[1]; } mx /= pts.length; my /= pts.length;
+      const front = i >= 3, rr = R * (front ? 0.62 : 0.78) * Math.min(1, s);
+      const stops: [number, string][] = front
+        ? [[0, this.cc.redL], [0.5, this.cc.red], [1, this.cc.redD]]
+        : [[0, this.cc.red], [0.55, this.cc.red], [1, this.cc.redD]];
+      B.fillGrad(pts, mx - R * 0.14, my - R * 0.18, rr, stops);
+      if (R >= 16 && s > 0.5) B.outline(pts, this.cc.redD, lw * 0.6);
       if (q[6] && R >= 12 && s > 0.4) {
         const arc: number[][] = []; for (let k = 0; k <= 14; k++) arc.push(pt(Math.PI * (1.18 + 0.64 * k / 14)));
         this.strokeRange(B, arc, 0, Math.min(1, (s - 0.4) / 0.5), this.cc.line, lw * 0.8);
@@ -662,7 +682,15 @@ export class Garden {
     if (Math.abs(tgt - this.chCur) >= 1.5) { this.chCur = tgt; this.applyCell(); }
     this.paint(now, true);
   }
-  pal() { const p = this.PALrow(); return { bg: p[1], C: { red: p[2], blue: p[3], line: p[4], text: p[5], vein: p[1] } }; }
+  pal() {
+    const p = this.PALrow();
+    if (this._palRow !== p) {
+      const rt = tones(p[2]), bt = tones(p[3]);
+      this._palRow = p;
+      this._palC = { red: p[2], blue: p[3], line: p[4], text: p[5], vein: p[1], redD: rt.dark, redL: rt.light, blueD: bt.dark, blueL: bt.light };
+    }
+    return { bg: p[1], C: this._palC };
+  }
   mainState() { return { letters: this.letters, S: this.Sd, C: this.pal().C, boil: this.props.boil ?? true, recoil: this.props.recoil ?? 20, speed: 1, wither: 260, face: true }; }
   paint(now: number, caret: boolean) {
     const s = this.surface;

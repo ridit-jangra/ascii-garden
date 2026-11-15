@@ -61,9 +61,22 @@ export function lineGlyph(angle: number) {
   return a < Math.PI / 8 || a >= (7 * Math.PI) / 8 ? "-" : a < (3 * Math.PI) / 8 ? "\\" : a < (5 * Math.PI) / 8 ? "|" : "/";
 }
 
-// Roles: 0 background, 1 flower, 2 stem and leaf, 3 flower line, 4 type.
-const SETS = ["", "*oO0%&@", ":;+=x*", "()/~|", "#@8&%B"];
+// Roles: 0 background, 1 flower, 2 stem and leaf, 3 flower line, 4 type,
+// 5 flower shadow, 6 flower highlight, 7 leaf shadow, 8 leaf highlight.
+// Shadows get dense glyphs, highlights get sparse ones, so shading reads as texture.
+const SETS = ["", "O0o*&", ":;+=x*", "()/~|", "#@8&%B", "@%#8&W", ".:'`,", "#%=xX", ".:'`;"];
+/** Which flower/leaf/line/type family a role belongs to. */
+const FAM = [0, 1, 2, 3, 4, 1, 1, 2, 2];
+const NR = 9;
 const RAMP = ".',:;+=";
+
+const toRGB = (hex: string) => hex2rgb(hex);
+const toHex = (c: RGB) => "#" + (pack(c[0], c[1], c[2]) | 0x1000000).toString(16).slice(1);
+/** A darker and a lighter version of a colour, as hex. Shared by the garden (to draw) and the surface (to read back). */
+export function tones(hex: string) {
+  const c = toRGB(hex);
+  return { dark: toHex(mix(c, [0, 0, 0], 0.46)), light: toHex(mix(c, [255, 255, 255], 0.42)) };
+}
 const SPARKLE: RGB = [255, 250, 240];
 
 const CELL_NONE = 0;
@@ -93,19 +106,19 @@ export class AsciiSurface {
   private ctx: CanvasRenderingContext2D;
   private bgCanvas = document.createElement("canvas");
   private bgDirty = true;
-  private roles: RGB[] = [[0, 0, 0], [255, 0, 0], [0, 0, 255], [255, 180, 168], [255, 255, 255]];
+  private roles: RGB[] = [[0, 0, 0], [255, 0, 0], [0, 0, 255], [255, 180, 168], [255, 255, 255], [140, 0, 0], [255, 120, 120], [0, 0, 140], [120, 120, 255]];
 
   private flag = new Uint8Array(0);
   private fill = new Uint32Array(0);
   private color = new Uint32Array(0);
   private glyph = new Uint16Array(0);
 
-  private an = new Int32Array(5);
-  private asx = new Float64Array(5);
-  private asy = new Float64Array(5);
-  private asxx = new Float64Array(5);
-  private asyy = new Float64Array(5);
-  private asxy = new Float64Array(5);
+  private an = new Int32Array(NR);
+  private asx = new Float64Array(NR);
+  private asy = new Float64Array(NR);
+  private asxx = new Float64Array(NR);
+  private asyy = new Float64Array(NR);
+  private asxy = new Float64Array(NR);
   private th = 0;
   private ratio = 1;
   private pxs: number[] = [];
@@ -126,7 +139,8 @@ export class AsciiSurface {
   }
 
   setRoles(r: Roles) {
-    this.roles = [hex2rgb(r.bg), hex2rgb(r.red), hex2rgb(r.blue), hex2rgb(r.line), hex2rgb(r.text)];
+    const rt = tones(r.red), bt = tones(r.blue);
+    this.roles = [r.bg, r.red, r.blue, r.line, r.text, rt.dark, rt.light, bt.dark, bt.light].map(hex2rgb);
     this.bgDirty = true;
   }
 
@@ -191,14 +205,19 @@ export class AsciiSurface {
     this.bgDirty = false;
   }
 
-  /** Principal axis of one role's sub-pixels inside the current cell. */
-  private axis(k: number) {
-    const n = this.an[k];
-    const mx = this.asx[k] / n;
-    const my = this.asy[k] / n;
-    const cxx = this.asxx[k] / n - mx * mx;
-    const cyy = this.asyy[k] / n - my * my;
-    const cxy = this.asxy[k] / n - mx * my;
+  /** Principal axis of one family's sub-pixels (all its tones together) inside the current cell. */
+  private axis(f: number) {
+    let n = 0, sx = 0, sy = 0, sxx = 0, syy = 0, sxy = 0;
+    for (let k = 1; k < NR; k++) {
+      if (FAM[k] !== f) continue;
+      n += this.an[k]; sx += this.asx[k]; sy += this.asy[k]; sxx += this.asxx[k]; syy += this.asyy[k]; sxy += this.asxy[k];
+    }
+    if (n === 0) { this.th = 0; this.ratio = 1; return; }
+    const mx = sx / n;
+    const my = sy / n;
+    const cxx = sxx / n - mx * mx;
+    const cyy = syy / n - my * my;
+    const cxy = sxy / n - mx * my;
     const half = (cxx - cyy) / 2;
     const rad = Math.sqrt(half * half + cxy * cxy);
     const mean = (cxx + cyy) / 2;
@@ -217,8 +236,7 @@ export class AsciiSurface {
     const N = SX * SY;
     const bg = roles[0];
     const [bgR, bgG, bgB] = bg;
-    const r1 = roles[1], r2 = roles[2], r3 = roles[3], r4 = roles[4];
-    const rr = [bg, r1, r2, r3, r4];
+    const rr = roles;
 
     for (let r = 0; r < rows; r++) {
       for (let c = 0; c < cols; c++) {
@@ -232,7 +250,7 @@ export class AsciiSurface {
             if (cr === bgR && cg === bgG && cb === bgB) continue;
             let best = 0;
             let bd = (cr - bgR) * (cr - bgR) + (cg - bgG) * (cg - bgG) + (cb - bgB) * (cb - bgB);
-            for (let k = 1; k < 5; k++) {
+            for (let k = 1; k < NR; k++) {
               const q = rr[k];
               const d = (cr - q[0]) * (cr - q[0]) + (cg - q[1]) * (cg - q[1]) + (cb - q[2]) * (cb - q[2]);
               if (d < bd) { bd = d; best = k; }
@@ -242,39 +260,42 @@ export class AsciiSurface {
             an[best]++; asx[best] += px; asy[best] += py; asxx[best] += px * px; asyy[best] += py * py; asxy[best] += px * py;
           }
         }
-        const total = an[1] + an[2] + an[3] + an[4];
+        let total = 0;
+        for (let k = 1; k < NR; k++) total += an[k];
         if (total < 3) continue;
         let dom = 1;
-        for (let k = 2; k < 5; k++) if (an[k] > an[dom]) dom = k;
+        for (let k = 2; k < NR; k++) if (an[k] > an[dom]) dom = k;
+        const domFam = FAM[dom];
         const cov = total / N;
         const idx = r * cols + c;
         const key = (hash3(c, r, 17) * 4294967295) >>> 0;
         const roll = hash3(key, Math.floor(t * 2.4 + (key % 997) / 97), 7);
         const base = rr[dom];
-        this.axis(dom);
+        this.axis(domFam);
         const domTh = this.th;
         const domRatio = this.ratio;
-        const lineish = dom === 4 ? 1.5 : 1.9;
+        const lineish = domFam === 4 ? 1.5 : 1.9;
         const solid = cov >= 0.8 || (cov >= 0.58 && domRatio < 2.3);
 
         if (solid) {
-          // second colour in the cell, e.g. a flower's swirl line over its petals
+          // a second family in the cell, e.g. a flower's swirl line over its petals
           let sec = 0;
-          for (let k = 1; k < 5; k++) if (k !== dom && an[k] >= 4 && (sec === 0 || an[k] > an[sec])) sec = k;
+          for (let k = 1; k < NR; k++) if (FAM[k] !== domFam && an[k] >= 4 && (sec === 0 || an[k] > an[sec])) sec = k;
           let fillC: RGB;
           let glyphC: RGB;
           let ch0: string;
-          if (dom === 4) {
+          if (domFam === 4) {
             fillC = mix(base, bg, 0.82);
             glyphC = base;
           } else {
-            fillC = mix(base, bg, 0.22);
+            // highlights stay bright, shadows sink a little into the background
+            fillC = mix(base, bg, dom === 6 || dom === 8 ? 0.05 : dom === 5 || dom === 7 ? 0.3 : 0.2);
             glyphC = onFill(fillC);
           }
           const set = SETS[dom];
           ch0 = set[(key >>> 8) % set.length];
           if (sec) {
-            this.axis(sec);
+            this.axis(FAM[sec]);
             glyphC = rr[sec];
             ch0 = this.ratio > 1.6 ? lineGlyph(this.th) : "o";
           }
