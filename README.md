@@ -3,7 +3,7 @@
 Type, and a garden grows out of the letters, drawn entirely in text characters.
 
 <p align="center">
-  <img src="docs/demo.gif" alt="Typing ASCII Garden and watching it bloom" width="600">
+  <img src="docs/demo.gif" alt="hello, grown out of ASCII flowers" width="720">
 </p>
 
 Stems curl up out of every letter and end in flowers. Space cuts the stems so the next word grows its own garden, backspace withers, enter clears.
