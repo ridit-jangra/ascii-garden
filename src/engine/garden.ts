@@ -6,6 +6,7 @@
  * The frame loop runs on GSAP's ticker.
  */
 import { LayeredSurface, clamp, tones } from "./ascii";
+import { MIN_CELL } from "../tweaks";
 import type { AsciiSurface } from "./ascii";
 
 /** Anything with add/remove for a per-frame callback. The app passes GSAP's ticker; the standalone export uses this. */
@@ -76,11 +77,30 @@ export const FLOWERS = [
   { id: "lavender", label: "Lavender", glyph: "!" },
   { id: "fern", label: "Fern", glyph: "/" },
   { id: "dandelion", label: "Puff", glyph: "o" },
+  { id: "coral", label: "Coral", glyph: "Y" },
+  { id: "anemone", label: "Anemone", glyph: "~" },
+  { id: "jellyfish", label: "Jellyfish", glyph: "O" },
+  { id: "kelp", label: "Kelp", glyph: "}" },
+  { id: "quartz", label: "Quartz", glyph: "^" },
+  { id: "cluster", label: "Amethyst", glyph: "A" },
+  { id: "gem", label: "Gem", glyph: "<" },
+];
+
+/**
+ * What grows out of the letters. Each theme has its own species, and shapes how the stems end:
+ * tipP scales how many stems end in a growth (rather than a leaf or curl), leaf scales how many leaves there are.
+ */
+export const THEMES = [
+  { id: "botanical", label: "Botanical", group: "Flowers", tipP: 1, leaf: 1, kinds: ["rose", "tulip", "daisy", "poppy", "blossom", "lily", "bell", "lavender", "fern", "dandelion"] },
+  { id: "ocean", label: "Ocean", group: "Sea life", tipP: 1.6, leaf: 0.6, kinds: ["coral", "anemone", "jellyfish", "kelp"] },
+  { id: "crystal", label: "Crystal", group: "Crystals", tipP: 2.4, leaf: 0.08, kinds: ["quartz", "cluster", "gem"] },
 ];
 /** Each species' own default colour. The rose follows the palette's flower colour. */
 const KIND_COLOR: Record<string, string> = {
   tulip: "#FF8A1F", daisy: "#FFE14D", poppy: "#FF3B6B", blossom: "#FFB6D6", lily: "#E27BFF",
   bell: "#5FB2FF", lavender: "#9A78FF", fern: "#45D483", dandelion: "#EDEBD8",
+  coral: "#FF6F61", anemone: "#FF5FA2", jellyfish: "#6EE7F9", kelp: "#B8C23A",
+  quartz: "#BFE3FF", cluster: "#A66BFF", gem: "#2EC4B6",
 };
 /** The default colour of a species on a palette: its own hue, pulled toward the type colour if it would vanish into the background. */
 export function defaultKindColor(kind: string, palRow: string[]): string {
@@ -93,20 +113,30 @@ export function defaultKindColor(kind: string, palRow: string[]): string {
   return "#" + m(0) + m(1) + m(2);
 }
 /** How often each species turns up in "mixed". */
-const KIND_WEIGHT: Record<string, number> = { rose: 3, tulip: 2, daisy: 2, poppy: 2, blossom: 2, lily: 2, bell: 2, lavender: 2, fern: 1, dandelion: 1 };
+const KIND_WEIGHT: Record<string, number> = { rose: 3, tulip: 2, daisy: 2, poppy: 2, blossom: 2, lily: 2, bell: 2, lavender: 2, fern: 1, dandelion: 1, coral: 2, anemone: 2, jellyfish: 2, kelp: 2, quartz: 2, cluster: 2, gem: 2 };
 /** Size tweak per species so they sit well on a stem. */
-const KIND_SCALE: Record<string, number> = { rose: 1, tulip: 1.25, daisy: 1.25, poppy: 1.2, blossom: 1.3, lily: 1.3, bell: 1.2, lavender: 1.05, fern: 1.05, dandelion: 1.25 };
+const KIND_SCALE: Record<string, number> = { rose: 1, tulip: 1.25, daisy: 1.25, poppy: 1.2, blossom: 1.3, lily: 1.3, bell: 1.2, lavender: 1.05, fern: 1.05, dandelion: 1.25, coral: 1.2, anemone: 1.15, jellyfish: 1.2, kelp: 1, quartz: 1.2, cluster: 1.1, gem: 1 };
 
 const POSTER_CELL = { cw: 7, ch: 10 };
 
-/** Below this cell size the characters get too small to read, so that layer is drawn as real vector art instead of ASCII. */
-export const VECTOR_BELOW = 0.4;
+/**
+ * Vector mode is switched off for now. When a layer's cell size is below this, it is drawn as real vector art instead of
+ * ASCII. To bring it back set this to 0.4 and let the sliders go to 0 (MIN_CELL in tweaks.ts).
+ */
+export const VECTOR_BELOW = 0;
+
+/**
+ * The Ocean and Crystal themes are switched off for now (their species are hidden and the Theme switch is not shown).
+ * Set to true to bring them back.
+ */
+export const THEMES_ENABLED = false;
 
 export class Garden {
   [key: string]: any;
 
   custom: Record<string, string> = {};
   chaos = 0.3;
+  theme = "botanical";
   /** Character size of the flowers and of the type, each adjustable on its own (1 = default, lower = finer). */
   cellScale = 1;
   textScale = 1;
@@ -242,12 +272,13 @@ export class Garden {
    * subset each chosen species is equally likely. Flowers already grown keep their kind.
    */
   setFlowers(ids: string[] | string) {
-    const all = Object.keys(KIND_WEIGHT);
-    let list = Array.isArray(ids) ? ids : ids === "mixed" ? all : [ids];
+    const theme = THEMES.find(t => t.id === this.theme) || THEMES[0];
+    let list = Array.isArray(ids) ? ids : ids === "mixed" ? theme.kinds : [ids];
     list = list.filter(k => KIND_WEIGHT[k]);
-    if (!list.length) list = all;
+    if (!list.length) list = theme.kinds;
     this.state.flowers = list;
-    const weighted = list.length === all.length;
+    // a whole theme gets the default weighting (roses a little more often); a custom subset is evenly mixed
+    const weighted = THEMES.some(t => t.kinds.length === list.length && t.kinds.every(k => list.includes(k)));
     this.kinds = [];
     for (const k of list) for (let i = 0; i < (weighted ? KIND_WEIGHT[k] : 1); i++) this.kinds.push(k);
   }
@@ -443,6 +474,8 @@ export class Garden {
         for (const [o, c] of stops) gr.addColorStop(o, c);
         g.beginPath(); this.path(g, p, true); g.fillStyle = gr; g.fill();
       },
+      /** A polygon with sharp corners (the normal fill rounds them): crystal facets. */
+      poly: (p: number[][], col: string) => { g.beginPath(); g.moveTo(p[0][0], p[0][1]); for (let i = 1; i < p.length; i++) g.lineTo(p[i][0], p[i][1]); g.closePath(); g.fillStyle = col; g.fill(); },
       outline: (p: number[][], col: string, w: number) => { g.beginPath(); this.path(g, p, true); g.strokeStyle = col; g.lineWidth = Math.max(w, this.minLw || 0); g.lineJoin = "round"; g.stroke(); },
       text: (ch: string, x: number, y: number, S: number, col: string) => { g.font = `700 ${S}px ${this.F}`; g.textAlign = "center"; g.textBaseline = "alphabetic"; g.fillStyle = col; g.fillText(ch, x, y); },
     };
@@ -492,9 +525,9 @@ export class Garden {
   targetCh() { return clamp(((this.St || this.H * 0.28) / 17) * this.cellScale, 2, 18); }
   targetChT() { return clamp(((this.St || this.H * 0.28) / 17) * this.textScale, 2, 22); }
   /** Scales the flowers' character size: below 1 is finer and more detailed, above 1 is chunkier. */
-  setCellScale(v: number) { this.cellScale = clamp(v, 0, 1.8); if (this.surface && this.W) { this.chCur = this.targetCh(); this.applyCell(); } this.applyPosterCells(); }
+  setCellScale(v: number) { this.cellScale = clamp(v, MIN_CELL, 1.8); if (this.surface && this.W) { this.chCur = this.targetCh(); this.applyCell(); } this.applyPosterCells(); }
   /** The same for the type, on its own: the letters can be fine while the flowers are chunky, or the other way round. */
-  setTextScale(v: number) { this.textScale = clamp(v, 0, 1.8); if (this.surface && this.W) { this.chCurT = this.targetChT(); this.applyCell(); } this.applyPosterCells(); }
+  setTextScale(v: number) { this.textScale = clamp(v, MIN_CELL, 1.8); if (this.surface && this.W) { this.chCurT = this.targetChT(); this.applyCell(); } this.applyPosterCells(); }
   /** [flower cw, flower ch, text cw, text ch] for the 1080 poster. */
   posterCells() {
     const f = Math.max(2, Math.round(POSTER_CELL.ch * this.cellScale)), t = Math.max(2, Math.round(POSTER_CELL.ch * this.textScale));
@@ -660,6 +693,8 @@ export class Garden {
    * 0.3 matches the original Type Garden.
    */
   setChaos(v: number) { this.chaos = clamp(v, 0, 1); }
+  /** Which theme grows out of the letters. Set the species with setFlowers afterwards. */
+  setTheme(id: string) { this.theme = THEMES_ENABLED && THEMES.some(t => t.id === id) ? id : "botanical"; }
   /** Put words on the garden already fully grown (no typing, no bloom): what the code export starts from. */
   seed(text: string) {
     const now = performance.now();
@@ -681,10 +716,11 @@ export class Garden {
   }
   wordParams(ws: number) {
     const r = this.rng(ws * 7 + 13), c = this.chaos ?? 0.3;
+    const th = THEMES.find(t => t.id === this.theme) || THEMES[0];
     const dens = (this.props.density ?? 1) * (0.25 + c * 2.4) / 0.97;
     return {
-      roseP: Math.min(0.92, (0.3 + r() * 0.3) * (0.45 + c * 1.5)),
-      leafy: (0.6 + r() * 0.8) * dens, dens,
+      roseP: Math.min(0.95, (0.3 + r() * 0.3) * (0.45 + c * 1.5) * th.tipP),
+      leafy: (0.6 + r() * 0.8) * dens * th.leaf, dens,
       lean: (r() - 0.5) * 0.6 * (0.6 + c * 1.2),
       big: (0.85 + r() * 0.45) * (0.8 + c * 0.45),
       curvy: (0.8 + r() * 0.6) * (0.7 + c * 0.9),
@@ -866,6 +902,19 @@ export class Garden {
     B.fillGrad(pts, c[0], c[1], len * 0.75, stops);
     if (outline) B.outline(pts, outline, ow || 1);
   }
+  /** One hexagonal crystal standing on (ox, oy) and pointing along `ang`: three faces and three tip facets in different tones. */
+  prism(B: any, T: any, ox: number, oy: number, ang: number, len: number, wid: number, C: any) {
+    if (len < 2) return;
+    const dx = Math.cos(ang), dy = Math.sin(ang), px = -dy, py = dx;
+    const P = (u: number, v: number) => T(ox + px * u + dx * v, oy + py * u + dy * v);
+    const h = len * 0.74, w = wid, t = wid / 3;
+    B.poly([P(-w, 0), P(-t, 0), P(-t, h), P(-w, h)], C.red);
+    B.poly([P(-t, 0), P(t, 0), P(t, h), P(-t, h)], C.redL);
+    B.poly([P(t, 0), P(w, 0), P(w, h), P(t, h)], C.redD);
+    B.poly([P(-w, h), P(-t, h), P(0, len)], C.redL);
+    B.poly([P(-t, h), P(t, h), P(0, len)], C.red);
+    B.poly([P(t, h), P(w, h), P(0, len)], C.redD);
+  }
   blobPts(T: any, cx: number, cy: number, rx: number, ry: number, ang: number, ph: number, n = 22) {
     const ca = Math.cos(ang), sa = Math.sin(ang), pts: number[][] = [];
     for (let k = 0; k < n; k++) {
@@ -1003,6 +1052,106 @@ export class Garden {
           this.petal(B, T, mx, my, tang - 1.15, len, R * 0.1, [[0, C.blue], [1, C.blueL]]);
           this.petal(B, T, mx, my, tang + 1.15, len, R * 0.1, [[0, C.blueD], [1, C.blue]]);
         }
+        break;
+      }
+      case "coral": {
+        // a branching coral: thick limbs that fork, ending in bright polyps
+        const grow = Math.min(1.1, U(0, 0)), rnd = this.rng(Math.floor(e.ph1 * 1000) + 7);
+        const branch = (x: number, y: number, ang: number, len: number, depth: number) => {
+          const ex = x + Math.cos(ang) * len * grow, ey = y + Math.sin(ang) * len * grow;
+          B.stroke([T(x, y), T(ex, ey)], depth === 0 ? C.redL : depth === 1 ? C.red : C.redD, Math.max(lw, R * (0.035 + 0.022 * depth)));
+          if (depth === 0) { this.disc(B, T, ex, ey, R * 0.075 * grow, [[0, C.redL], [1, C.red]]); return; }
+          const n = 2 + (rnd() < 0.4 ? 1 : 0);
+          for (let i = 0; i < n; i++) branch(ex, ey, ang + (i - (n - 1) / 2) * (0.7 + rnd() * 0.3), len * (0.68 + rnd() * 0.12), depth - 1);
+        };
+        branch(0, R * 0.25, -Math.PI / 2, R * 0.85, 3);
+        break;
+      }
+      case "anemone": {
+        // a soft base with a fan of swaying tentacles
+        const s = Math.min(1.1, U(0, 0)), t = (this._now || 0) / 1000, n = 20;
+        for (let i = 0; i < n; i++) {
+          const u = i / (n - 1), ang0 = -Math.PI + 0.35 + u * (Math.PI - 0.7), len = R * (0.62 + 0.24 * Math.sin(i * 2.1)) * s;
+          let x = 0, y = R * 0.12;
+          const pts = [T(x, y)];
+          for (let k = 1; k <= 6; k++) {
+            const f = k / 6, ang = ang0 + 0.3 * Math.sin(t * 1.6 + i * 0.9 + f * 3) * f;
+            x += Math.cos(ang) * len / 6; y += Math.sin(ang) * len / 6;
+            pts.push(T(x, y));
+          }
+          B.stroke(pts, i % 2 ? C.redL : C.red, Math.max(lw, R * 0.03));
+          this.disc(B, T, x, y, R * 0.05 * s, [[0, C.redL], [1, C.red]]);
+        }
+        this.disc(B, T, 0, R * 0.2, R * 0.36 * Math.min(1, s), [[0, C.redL], [0.6, C.red], [1, C.redD]], e.ph2);
+        break;
+      }
+      case "jellyfish": {
+        // a glowing bell that bobs, with trailing tentacles
+        const s = Math.min(1.1, U(0, 0)), t = (this._now || 0) / 1000, bob = Math.sin(t * 1.8 + e.ph1) * R * 0.05, rr = R * 0.62 * s;
+        for (let i = 0; i < 7; i++) {
+          const x0 = (i - 3) * rr * 0.28, pts: number[][] = [];
+          for (let k = 0; k <= 8; k++) { const f = k / 8; pts.push(T(x0 + Math.sin(t * 2 + i * 1.3 + f * 5) * R * 0.07 * f, bob + R * 0.1 + f * R * 1.0 * s)); }
+          B.stroke(pts, i % 2 ? C.redL : C.red, Math.max(lw, R * 0.025));
+        }
+        const bell: number[][] = [];
+        for (let k = 0; k <= 20; k++) { const th = Math.PI + (k / 20) * Math.PI; bell.push(T(Math.cos(th) * rr, bob + R * 0.1 + Math.sin(th) * rr * 0.8)); }
+        bell.push(T(rr * 0.8, bob + R * 0.18), T(0, bob + R * 0.13), T(-rr * 0.8, bob + R * 0.18));
+        const c = T(-rr * 0.15, bob - rr * 0.3);
+        B.fillGrad(bell, c[0], c[1], rr * 1.1, [[0, C.redL], [0.55, C.red], [1, C.redD]]);
+        break;
+      }
+      case "kelp": {
+        // a swaying ribbon blade
+        const s = Math.min(1.1, U(0, 0)), t = (this._now || 0) / 1000, H = R * 2 * s, N = 14;
+        const left: number[][] = [], right: number[][] = [], mid: number[][] = [];
+        for (let i = 0; i <= N; i++) {
+          const f = i / N, y = R * 0.3 - f * H, x = Math.sin(f * 4 + e.ph1 + t * 1.2) * R * 0.28 * f;
+          const w = R * 0.2 * Math.sin(Math.PI * Math.pow(f, 0.6)) * (1 - 0.3 * f) + R * 0.03;
+          left.push(T(x - w, y)); right.push(T(x + w, y)); mid.push(T(x, y));
+        }
+        const c = T(0, R * 0.3 - H * 0.5);
+        B.fillGrad([...left, ...right.reverse()], c[0], c[1], H * 0.7, [[0, C.redD], [0.6, C.red], [1, C.redL]]);
+        B.stroke(mid, C.redL, Math.max(lw * 0.7, R * 0.02));
+        break;
+      }
+      case "quartz": {
+        // a standing cluster of hexagonal crystals
+        const A = [-0.5, -0.16, 0.14, 0.44], Lh = [0.95, 1.3, 1.12, 0.8], Wd = [0.15, 0.19, 0.16, 0.13], Ox = [-0.34, -0.08, 0.14, 0.36];
+        for (const i of [0, 3, 1, 2]) {
+          const s = U(i, 90); if (s <= 0.001) continue;
+          this.prism(B, T, Ox[i] * R, R * 0.35, -Math.PI / 2 + A[i], R * Lh[i] * Math.min(1.08, s), R * Wd[i], C);
+        }
+        break;
+      }
+      case "cluster": {
+        // an amethyst geode: many small points fanning out of a dark rock
+        const n = 9;
+        this.disc(B, T, 0, R * 0.42, R * 0.3 * Math.min(1, U(0, 0)), [[0, C.redD], [1, C.redD]], e.ph1);
+        const order = Array.from({ length: n }, (_, i) => i).sort((a, b) => Math.abs(b - (n - 1) / 2) - Math.abs(a - (n - 1) / 2));
+        for (const i of order) {
+          const s = U(i, 60); if (s <= 0.001) continue;
+          const f = (i - (n - 1) / 2) / ((n - 1) / 2), ang = -Math.PI / 2 + f * 1.15 + 0.05 * Math.sin(i * 5.1 + e.ph1);
+          const len = R * (0.55 + 0.5 * (1 - Math.abs(f)) + 0.15 * Math.sin(i * 3.3 + e.ph2)), wid = R * (0.1 + 0.05 * (1 - Math.abs(f)));
+          this.prism(B, T, f * R * 0.28, R * 0.4, ang, len * Math.min(1.08, s), wid, C);
+        }
+        break;
+      }
+      case "gem": {
+        // a cut gem with a sparkle that pulses
+        const s = Math.min(1.08, U(0, 0)); if (s <= 0.001) break;
+        const k = R * s, t = (this._now || 0) / 1000;
+        const GL = [-0.85 * k, -0.15 * k], GR = [0.85 * k, -0.15 * k], TL = [-0.45 * k, -0.62 * k], TR = [0.45 * k, -0.62 * k];
+        const ML = [-0.28 * k, -0.15 * k], MR = [0.28 * k, -0.15 * k], Pt = [0, 0.85 * k];
+        const P = (q: number[]) => T(q[0], q[1]);
+        B.poly([GL, TL, ML].map(P), C.red);
+        B.poly([TL, TR, MR, ML].map(P), C.redL);
+        B.poly([TR, GR, MR].map(P), C.redD);
+        B.poly([GL, ML, Pt].map(P), C.redD);
+        B.poly([ML, MR, Pt].map(P), C.red);
+        B.poly([MR, GR, Pt].map(P), C.redL);
+        const gs = k * (0.08 + 0.14 * (0.5 + 0.5 * Math.sin(t * 3 + e.ph1))), cx = -0.55 * k, cy = -0.3 * k;
+        B.stroke([T(cx - gs, cy), T(cx + gs, cy)], C.redL, lw * 0.8);
+        B.stroke([T(cx, cy - gs), T(cx, cy + gs)], C.redL, lw * 0.8);
         break;
       }
       case "dandelion": {

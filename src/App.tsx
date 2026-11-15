@@ -2,12 +2,12 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, typ
 import gsap from "gsap";
 import { Ascii } from "ascii.rest/react";
 import * as cherryBlossom from "ascii.rest/pieces/cherry-blossom";
-import { Garden, PAL, PRESETS, FLOWERS, defaultKindColor, type Mode } from "./engine/garden";
+import { Garden, PAL, PRESETS, FLOWERS, THEMES, THEMES_ENABLED, defaultKindColor, type Mode } from "./engine/garden";
 import CodeExport from "./export/CodeExport";
 import LiquidGlassFilter from "./components/LiquidGlassFilter";
 import GlassChoices from "./components/GlassChoices";
 import TweaksPanel, { type Group } from "./components/TweaksPanel";
-import { GLASS, KNOB_DEFAULTS, loadSaved, save } from "./tweaks";
+import { GLASS, KNOB_DEFAULTS, MIN_CELL, loadSaved, save } from "./tweaks";
 
 const ALL = FLOWERS.map((f) => f.id);
 const MODES = [{ value: "type", label: "Type" }, { value: "poster", label: "Poster" }];
@@ -39,11 +39,16 @@ export default function App() {
   const emptyRef = useRef<HTMLDivElement>(null);
   const saved = useRef(loadSaved(ALL, PAL.length)).current;
   const posterEl = useRef<HTMLCanvasElement | null>(null);
+  // the saved theme and the saved species that belong to it (anything else falls back to the whole theme)
+  const initTheme = (THEMES_ENABLED && THEMES.find((t) => t.id === saved.theme)) || THEMES[0];
+  const initFlowers = (() => { const f = saved.flowers.filter((k) => initTheme.kinds.includes(k)); return f.length ? f : initTheme.kinds; })();
 
   const [mode, setMode] = useState<Mode>(saved.mode);
   const [typed, setTyped] = useState(saved.text);
   const [palette, setPalette] = useState(saved.palette);
-  const [flowers, setFlowers] = useState<string[]>(saved.flowers);
+  const [theme, setTheme] = useState(initTheme.id);
+  const [flowers, setFlowers] = useState<string[]>(initFlowers);
+  const themeObj = THEMES.find((t) => t.id === theme) ?? THEMES[0];
   const [colors, setColors] = useState<Record<string, string>>(saved.colors);
   const [knobs, setKnobs] = useState(saved.knobs);
   const [preset, setPreset] = useState(PRESETS.some((x) => x.id === saved.poster.preset) ? saved.poster.preset : "breathe");
@@ -65,7 +70,8 @@ export default function App() {
   useEffect(() => {
     const g = new Garden(canvasRef.current!, inputRef.current!, { onStatus: setStatus, onBusy: setBusy, onCount: setCount, onText: setTyped });
     garden.current = g;
-    g.setFlowers(saved.flowers);
+    g.setTheme(initTheme.id);
+    g.setFlowers(initFlowers);
     g.setKindColors(saved.colors);
     g.setChaos(saved.knobs.chaos);
     g.setBoil(saved.knobs.boil);
@@ -105,8 +111,8 @@ export default function App() {
   useEffect(() => { garden.current?.setCellScale(knobs.detail); }, [knobs.detail]);
   useEffect(() => { garden.current?.setTextScale(knobs.textDetail); }, [knobs.textDetail]);
   useEffect(() => {
-    save({ palette, flowers, colors, knobs, text: typed, mode, poster: { text: pText, preset, seed } });
-  }, [palette, flowers, colors, knobs, typed, mode, pText, preset, seed]);
+    save({ palette, theme, flowers, colors, knobs, text: typed, mode, poster: { text: pText, preset, seed } });
+  }, [palette, theme, flowers, colors, knobs, typed, mode, pText, preset, seed]);
 
   // chaos: the engine follows the slider at once; what is on screen regrows shortly after you stop moving it
   const firstChaos = useRef(true);
@@ -145,6 +151,17 @@ export default function App() {
   };
   const toggleFlower = (id: string) => applyFlowers(flowers.includes(id) ? flowers.filter((k) => k !== id) : [...flowers, id]);
 
+  // theme: what grows out of the letters. Everything on screen regrows in the new theme.
+  const changeTheme = (id: string) => {
+    const t = THEMES.find((x) => x.id === id) ?? THEMES[0];
+    setTheme(t.id);
+    setFlowers(t.kinds);
+    const g = garden.current; if (!g) return;
+    g.setTheme(t.id);
+    g.setFlowers(t.kinds);
+    if (mode === "poster") g.setPoster({ text: pText, preset, seed }); else { g.regrow(); g.refocus(); }
+  };
+
   const goMode = (m: Mode) => {
     if (m === mode) return;
     if (m === "poster") setPText(garden.current?.liveText() || pText);
@@ -157,12 +174,12 @@ export default function App() {
   };
   const closeExport = useCallback(() => { setExportOpen(false); garden.current?.refocus(); }, []);
   const exportBase = useMemo(
-    () => ({ text: exportText, palette: row, flowers, colors, chaos: knobs.chaos, detail: knobs.detail, textDetail: knobs.textDetail }),
-    [exportText, row, flowers, colors, knobs.chaos, knobs.detail, knobs.textDetail],
+    () => ({ text: exportText, theme, palette: row, flowers, colors, chaos: knobs.chaos, detail: knobs.detail, textDetail: knobs.textDetail }),
+    [exportText, theme, row, flowers, colors, knobs.chaos, knobs.detail, knobs.textDetail],
   );
 
   const resetAll = () => {
-    setPalette(0); setColors({}); setKnobs(KNOB_DEFAULTS); applyFlowers(ALL);
+    setPalette(0); setColors({}); setKnobs(KNOB_DEFAULTS); changeTheme("botanical");
   };
 
   // GSAP: glass chrome slides in
@@ -198,20 +215,21 @@ export default function App() {
     }]]);
   }
   groups.push(["Garden", [
+    ...(THEMES_ENABLED ? [{ kind: "node" as const, key: "theme", node: <ThemeSwitch value={theme} onChange={changeTheme} /> }] : []),
     { kind: "range", key: "chaos", label: "Chaos", min: 0, max: 1, step: 0.01, def: KNOB_DEFAULTS.chaos, value: knobs.chaos, set: (v) => setKnob("chaos", v), hint: "From minimal botanical typography to the garden taking over: stems, branches, flower size and leaves all grow with it." },
     { kind: "node", key: "chaos-cap", node: <ChaosCaption value={knobs.chaos} /> },
-    { kind: "range", key: "detail", label: "Flower cell size", min: 0, max: 1.8, step: 0.05, def: KNOB_DEFAULTS.detail, value: knobs.detail, set: (v) => setKnob("detail", v), hint: "Size of the characters the flowers are made of. Lower is finer and more detailed, higher is chunkier. Below 0.4 the characters would be too small to read, so the flowers switch to smooth vector art instead of ASCII." },
-    { kind: "range", key: "textDetail", label: "Text cell size", min: 0, max: 1.8, step: 0.05, def: KNOB_DEFAULTS.textDetail, value: knobs.textDetail, set: (v) => setKnob("textDetail", v), hint: "Size of the characters the letters are made of, set separately from the flowers. Below 0.4 the type switches from ASCII to the real font." },
+    { kind: "range", key: "detail", label: "Flower cell size", min: MIN_CELL, max: 1.8, step: 0.05, def: KNOB_DEFAULTS.detail, value: knobs.detail, set: (v) => setKnob("detail", v), hint: "Size of the characters the flowers are made of. Lower is finer and more detailed, higher is chunkier." },
+    { kind: "range", key: "textDetail", label: "Text cell size", min: MIN_CELL, max: 1.8, step: 0.05, def: KNOB_DEFAULTS.textDetail, value: knobs.textDetail, set: (v) => setKnob("textDetail", v), hint: "Size of the characters the letters are made of, set separately from the flowers." },
     { kind: "range", key: "recoil", label: "Recoil", min: 0, max: 80, step: 1, def: KNOB_DEFAULTS.recoil, value: knobs.recoil, set: (v) => setKnob("recoil", v), hint: "How far a stem snaps back when you cut it with space." },
     { kind: "toggle", key: "boil", label: "Boil", def: KNOB_DEFAULTS.boil, value: knobs.boil, set: (v) => setKnob("boil", v), hint: "Hand-drawn jitter on every stem and flower." },
     { kind: "toggle", key: "grid", label: "Cell grid", def: KNOB_DEFAULTS.grid, value: knobs.grid, set: (v) => setKnob("grid", v), hint: "Faint grid lines behind the characters." },
   ]]);
-  groups.push(["Flowers", [{
+  groups.push([themeObj.group, [{
     kind: "node", key: "flowers",
     node: (
       <FlowerPicker
-        flowers={flowers} colors={colors} row={row}
-        onToggle={toggleFlower} onSolo={(id) => applyFlowers([id])} onAll={() => applyFlowers(ALL)}
+        kinds={themeObj.kinds} flowers={flowers} colors={colors} row={row}
+        onToggle={toggleFlower} onSolo={(id) => applyFlowers([id])} onAll={() => applyFlowers(themeObj.kinds)}
         onColor={(id, hex) => setColors((c) => ({ ...c, [id]: hex }))} onReset={() => setColors({})}
       />
     ),
@@ -316,7 +334,10 @@ export default function App() {
           )}
         </div>
 
-        <TweaksPanel groups={groups} exportJSON={exportJSON} onReset={resetAll} />
+        <TweaksPanel
+          groups={groups} exportJSON={exportJSON} onReset={resetAll}
+          footer={<>Based on <a href="https://type-garden.vercel.app/" target="_blank" rel="noopener noreferrer">Type Garden</a> by Akshat Agarwal</>}
+        />
       </div>
 
       <CodeExport open={exportOpen} onClose={closeExport} base={exportBase} />
@@ -338,20 +359,36 @@ function ChaosCaption({ value }: { value: number }) {
   return <div className={"chaos-cap" + (label.startsWith("THE") ? " max" : "")} ref={cap}>{label}</div>;
 }
 
+/** Botanical, Ocean or Crystal: what grows out of the letters. */
+function ThemeSwitch({ value, onChange }: { value: string; onChange: (id: string) => void }) {
+  return (
+    <div className="theme-seg" role="radiogroup" aria-label="Theme">
+      {THEMES.map((t) => (
+        <button
+          key={t.id} type="button" role="radio" aria-checked={t.id === value} className={"tool" + (t.id === value ? " on" : "")}
+          onClick={(e) => { e.stopPropagation(); onChange(t.id); }}
+        >{t.label}</button>
+      ))}
+    </div>
+  );
+}
+
 interface PickerProps {
+  /** The species of the current theme. */
+  kinds: string[];
   flowers: string[]; colors: Record<string, string>; row: string[];
   onToggle: (id: string) => void; onSolo: (id: string) => void; onAll: () => void;
   onColor: (id: string, hex: string) => void; onReset: () => void;
 }
 
 /** Multi-select flower chips: toggle any species into your own mix, and tweak each one's colour. */
-function FlowerPicker({ flowers, colors, row, onToggle, onSolo, onAll, onColor, onReset }: PickerProps) {
+function FlowerPicker({ kinds, flowers, colors, row, onToggle, onSolo, onAll, onColor, onReset }: PickerProps) {
   const custom = Object.keys(colors).length > 0;
-  const allOn = flowers.length === FLOWERS.length;
+  const allOn = kinds.every((k) => flowers.includes(k));
   return (
     <div className="picker" aria-label="Flowers">
       <div className="chips">
-        {FLOWERS.map((f) => {
+        {FLOWERS.filter((f) => kinds.includes(f.id)).map((f) => {
           const sel = flowers.includes(f.id);
           const col = colors[f.id] || defaultKindColor(f.id, row);
           return (

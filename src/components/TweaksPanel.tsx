@@ -74,10 +74,12 @@ interface Props {
   groups: Group[];
   exportJSON: () => string;
   onReset: () => void;
+  /** Small line at the bottom of the panel (the credit). */
+  footer?: ReactNode;
 }
 
 /** The Tweaks menu, ported from ascii-animals: a liquid-glass panel of grouped sliders, switches and custom rows. */
-export default function TweaksPanel({ groups, exportJSON, onReset }: Props) {
+export default function TweaksPanel({ groups, exportJSON, onReset, footer }: Props) {
   const [open, setOpen] = useState(readOpen);
   const [tip, setTip] = useState<Tip | null>(null);
   const [copyLabel, setCopyLabel] = useState("Copy");
@@ -178,6 +180,7 @@ export default function TweaksPanel({ groups, exportJSON, onReset }: Props) {
             ))}
           </div>
         </div>
+        {footer && <footer className="tweaks-foot">{footer}</footer>}
       </aside>
       {tip && (
         <div ref={tipRef} className="tweaks-tip" role="tooltip">

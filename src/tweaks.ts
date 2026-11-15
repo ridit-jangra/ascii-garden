@@ -1,5 +1,11 @@
 /** Everything the Tweaks panel controls, and how it is saved. */
 
+/**
+ * The smallest character size the sliders allow. Below about 0.4 the characters get too small to read and vanish.
+ * (Vector fallback below it exists in the engine but is switched off: see VECTOR_BELOW in garden.ts.)
+ */
+export const MIN_CELL = 0.4;
+
 /** The liquid-glass look is fixed (the Glass tweaks were removed). */
 export const GLASS = { blur: 6, refraction: 40, ripple: 0.007, tint: 0, edge: 0.55, radius: 24 };
 
@@ -7,9 +13,9 @@ export interface GardenKnobs {
   chaos: number;
   boil: boolean;
   recoil: number;
-  /** The flowers' character size: below 0.4 they switch to real vector art, then finer to chunkier up to 1.8. */
+  /** The flowers' character size: lower is finer and more detailed, higher is chunkier (MIN_CELL to 1.8). */
   detail: number;
-  /** The type's character size, on its own: below 0.4 it switches to the real font. */
+  /** The type's character size, on its own (MIN_CELL to 1.8). */
   textDetail: number;
   grid: boolean;
 }
@@ -21,6 +27,8 @@ export interface Saved {
   flowers: string[];
   colors: Record<string, string>;
   knobs: GardenKnobs;
+  /** What grows: botanical, ocean or crystal. */
+  theme: string;
   /** The words on the garden when you last left, restored fully grown. */
   text: string;
   mode: "type" | "poster";
@@ -42,6 +50,7 @@ export function loadSaved(all: string[], paletteCount: number): Saved {
     palette: Number.isInteger(j.palette) && j.palette >= 0 && j.palette < paletteCount ? j.palette : 0,
     flowers: flowers.length ? flowers : all,
     colors: j.colors && typeof j.colors === "object" ? j.colors : {},
+    theme: typeof j.theme === "string" ? j.theme : "botanical",
     text: typeof j.text === "string" ? j.text.slice(0, 200) : "",
     mode: j.mode === "poster" ? "poster" : "type",
     poster: {
@@ -53,8 +62,8 @@ export function loadSaved(all: string[], paletteCount: number): Saved {
       chaos: num(k.chaos, KNOB_DEFAULTS.chaos, 0, 1),
       boil: typeof k.boil === "boolean" ? k.boil : KNOB_DEFAULTS.boil,
       recoil: num(k.recoil, KNOB_DEFAULTS.recoil, 0, 80),
-      detail: num(k.detail, KNOB_DEFAULTS.detail, 0, 1.8),
-      textDetail: num(k.textDetail, KNOB_DEFAULTS.textDetail, 0, 1.8),
+      detail: num(k.detail, KNOB_DEFAULTS.detail, MIN_CELL, 1.8),
+      textDetail: num(k.textDetail, KNOB_DEFAULTS.textDetail, MIN_CELL, 1.8),
       grid: typeof k.grid === "boolean" ? k.grid : KNOB_DEFAULTS.grid,
     },
   };

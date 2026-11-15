@@ -7,7 +7,7 @@ interface Props {
   open: boolean;
   onClose: () => void;
   /** The garden as it is now: words, palette, species and colour tweaks. */
-  base: Pick<ExportConfig, "text" | "palette" | "flowers" | "colors" | "chaos" | "detail" | "textDetail">;
+  base: Pick<ExportConfig, "text" | "theme" | "palette" | "flowers" | "colors" | "chaos" | "detail" | "textDetail">;
 }
 
 const EXPORT_KEY = "type-garden-ascii:export";

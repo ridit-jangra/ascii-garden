@@ -86,6 +86,15 @@ export const KIND_GLYPHS: Record<string, [string, string, string]> = {
   lavender: ["!|#I1", "li!:;", ".'`,:"],
   fern: ["X%#/Y", "/V+x*", ".:'`;"],
   dandelion: ["O@0&#", "o*+:.", "'`.,-"],
+  // ocean
+  coral: ["%&@#8", "*oO+0", ";:'.,"],
+  anemone: ["@%&#W", "~*+=o", ".:'`;"],
+  jellyfish: ["O0@%o", "()~oc", ".:'`,"],
+  kelp: ["#%{}8", "}{)(|", "'`.:,"],
+  // crystal
+  quartz: ["#H%@M", "/\\<>^", ".'`:,"],
+  cluster: ["@#M%W", "^vAV*", ".'`,;"],
+  gem: ["#@%MW", "<>^v+", "*.'`:"],
 };
 
 const toRGB = (hex: string) => hex2rgb(hex);

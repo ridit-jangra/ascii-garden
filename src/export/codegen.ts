@@ -18,6 +18,8 @@ export const FLAVORS: { id: Flavor; label: string; file: string; note: string }[
 
 export interface ExportConfig {
   text: string;
+  /** botanical, ocean or crystal */
+  theme: string;
   /** name, background, flower, stem and leaf, flower line, type */
   palette: string[];
   flowers: string[];
@@ -37,7 +39,7 @@ const HINT = "type to grow · space cuts · backspace withers · enter clears";
 
 const literal = (c: ExportConfig) =>
   JSON.stringify(
-    { text: c.text, palette: c.palette, flowers: c.flowers, colors: c.colors, chaos: c.chaos, detail: c.detail, textDetail: c.textDetail, interactive: c.interactive },
+    { text: c.text, theme: c.theme, palette: c.palette, flowers: c.flowers, colors: c.colors, chaos: c.chaos, detail: c.detail, textDetail: c.textDetail, interactive: c.interactive },
     null,
     2,
   );
@@ -51,6 +53,7 @@ function react(c: ExportConfig) {
 // No dependencies besides React: the garden is plain canvas and JavaScript, inlined below.
 // Drop this file into your project and render <TypeGarden />. Give its parent a height.
 // It loads Playfair Display and JetBrains Mono from Google Fonts by itself.
+// Based on Type Garden by Akshat Agarwal: https://type-garden.vercel.app
 import { useEffect, useRef } from "react";
 
 /* eslint-disable */
@@ -83,6 +86,7 @@ function tailwind(c: ExportConfig) {
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Type Garden</title>
+  <!-- Based on Type Garden by Akshat Agarwal: https://type-garden.vercel.app -->
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="${FONTS}" rel="stylesheet" />
@@ -115,6 +119,7 @@ function css(c: ExportConfig) {
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Type Garden</title>
+  <!-- Based on Type Garden by Akshat Agarwal: https://type-garden.vercel.app -->
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="${FONTS}" rel="stylesheet" />
