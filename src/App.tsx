@@ -495,7 +495,7 @@ export default function App() {
 
         <TweaksPanel
           groups={groups} exportJSON={exportJSON} onReset={resetAll} onOpenChange={setPanelOpen}
-          footer={<>Based on <a href="https://type-garden.vercel.app/" target="_blank" rel="noopener noreferrer">Type Garden</a> by Akshat Agarwal</>}
+          footer={<>Based on <a href="https://type-garden.vercel.app/" target="_blank" rel="noopener noreferrer">Type Garden</a> by <a href="https://x.com/art_akshat" target="_blank" rel="noopener noreferrer">Akshat Agarwal</a></>}
         />
       </div>
 

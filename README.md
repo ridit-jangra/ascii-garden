@@ -10,7 +10,7 @@ Stems curl up out of every letter and end in flowers. Space cuts the stems so th
 
 ## Credits
 
-ASCII Garden is a reinterpretation of **[Type Garden](https://type-garden.vercel.app/) by Akshat Agarwal**: type and stems and roses grow out of the letters. The growth, the motion and the look of the stems and roses come from that original. Please go and enjoy the real thing.
+ASCII Garden is a reinterpretation of **[Type Garden](https://type-garden.vercel.app/) by [Akshat Agarwal](https://x.com/art_akshat)**: type and stems and roses grow out of the letters. The growth, the motion and the look of the stems and roses come from that original. Please go and enjoy the real thing.
 
 Also built on the work of others:
 
