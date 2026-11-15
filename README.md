@@ -1,18 +1,16 @@
-# Type Garden (ASCII)
-
-Type, and a garden grows out of the letters, drawn entirely in text characters.
-
 <p align="center">
   <img src="docs/demo.gif" alt="hello, grown out of ASCII flowers" width="720">
 </p>
+
+# ASCII Garden
+
+Type, and a garden grows out of the letters, drawn entirely in text characters.
 
 Stems curl up out of every letter and end in flowers. Space cuts the stems so the next word grows its own garden, backspace withers, enter clears.
 
 ## Credits
 
-**The idea is not mine.** This is a reinterpretation of **[Type Garden](https://type-garden.vercel.app/) by Akshat Agarwal**: type and stems and roses grow out of the letters, space cuts the stems, backspace withers, enter clears. The growth, the motion and the look of the stems and roses come from that original. Please go and enjoy the real thing.
-
-What is different here: everything is re-drawn as ASCII, and the original's commercial typeface (GT Ultra Fine) is replaced by Playfair Display. This is an unofficial fan version, not affiliated with or endorsed by the original author.
+ASCII Garden is a reinterpretation of **[Type Garden](https://type-garden.vercel.app/) by Akshat Agarwal**: type and stems and roses grow out of the letters. The growth, the motion and the look of the stems and roses come from that original. Please go and enjoy the real thing.
 
 Also built on the work of others:
 
@@ -58,18 +56,6 @@ npm run build    # type-checks and builds to dist/
 | enter | clear |
 | click | a butterfly lands on a flower |
 | double-click | plant a rose |
-
-## How it works
-
-The garden is drawn with ordinary vector calls onto a hidden low-resolution canvas. Each character cell of that picture is then turned into text: solid areas become a block of colour with a dense glyph, thin shapes such as stems become line glyphs that follow their angle (`- \ | /`), and partly covered cells become soft edge glyphs. Shading uses dark, base and light tones of each colour, which map to dense, medium and sparse glyphs. The flowers and the type are separate layers on their own grids, which is why their sizes are independent.
-
-```
-src/engine/garden.ts      growth, motion, species, poster
-src/engine/ascii.ts       the canvas-to-characters rasterizer
-src/standalone/entry.ts   the dependency-free build used by the code export
-src/export/               code generators and the syntax highlighter
-src/components/           liquid glass filter, Tweaks panel, glass switch
-```
 
 ## License
 
