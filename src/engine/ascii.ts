@@ -13,6 +13,7 @@
 export type RGB = [number, number, number];
 
 /** Sub-pixels per cell along x and y. */
+/** Most sub-pixel samples per cell along x and y. Smaller cells use fewer (see resize). */
 export const SX = 4;
 export const SY = 6;
 
@@ -64,11 +65,28 @@ export function lineGlyph(angle: number) {
 // Roles: 0 background, 1 flower, 2 stem and leaf, 3 flower line, 4 type,
 // 5 flower shadow, 6 flower highlight, 7 leaf shadow, 8 leaf highlight.
 // Shadows get dense glyphs, highlights get sparse ones, so shading reads as texture.
-const SETS = ["", "O0o*&", ":;+=x*", "()/~|", "#@8&%B", "@%#8&W", ".:'`,", "#%=xX", ".:'`;"];
+const BASE_SETS = ["", "O0o*&", ":;+=x*", "()/~|", "#@8&%B", "@%#8&W", ".:'`,", "#%=xX", ".:'`;"];
 /** Which flower/leaf/line/type family a role belongs to. */
-const FAM = [0, 1, 2, 3, 4, 1, 1, 2, 2];
-const NR = 9;
+const BASE_FAM = [0, 1, 2, 3, 4, 1, 1, 2, 2];
+/** 0 base colour, 1 shadow, 2 highlight. */
+const BASE_TONE = [0, 0, 0, 0, 0, 1, 2, 1, 2];
 const RAMP = ".',:;+=";
+
+/**
+ * Every species other than the rose gets its own colour and its own glyph family
+ * [shadow, base, highlight], so each flower has a texture of its own as well as a colour.
+ */
+export const KIND_GLYPHS: Record<string, [string, string, string]> = {
+  tulip: ["HM#%W", "Yy+*=", ".'`:,"],
+  daisy: ["@08O", "o*:+.", "'`.,;"],
+  poppy: ["&@%#8", "O0o*^", "`'.,:"],
+  blossom: ["%&$@8", "*+x:;", ".'`,-"],
+  lily: ["W#M%@", "&Zz+=", "`.'~:"],
+  bell: ["B#8%@", "nu+:=", ".'`;,"],
+  lavender: ["!|#I1", "li!:;", ".'`,:"],
+  fern: ["X%#/Y", "/V+x*", ".:'`;"],
+  dandelion: ["O@0&#", "o*+:.", "'`.,-"],
+};
 
 const toRGB = (hex: string) => hex2rgb(hex);
 const toHex = (c: RGB) => "#" + (pack(c[0], c[1], c[2]) | 0x1000000).toString(16).slice(1);
@@ -89,6 +107,8 @@ export interface Roles {
   blue: string;
   line: string;
   text: string;
+  /** Colour of each species other than the rose (the rose uses `red`). */
+  kinds?: Record<string, string>;
 }
 
 export class AsciiSurface {
@@ -106,32 +126,49 @@ export class AsciiSurface {
   private ctx: CanvasRenderingContext2D;
   private bgCanvas = document.createElement("canvas");
   private bgDirty = true;
-  private roles: RGB[] = [[0, 0, 0], [255, 0, 0], [0, 0, 255], [255, 180, 168], [255, 255, 255], [140, 0, 0], [255, 120, 120], [0, 0, 140], [120, 120, 255]];
+  private roles: RGB[] = [];
+  private fam: number[] = BASE_FAM;
+  private sets: string[] = BASE_SETS;
+  private tone: number[] = BASE_TONE;
+  private nr = 9;
+  /** 15-bit colour -> role index, rebuilt whenever the roles change. */
+  private lut = new Uint8Array(32768);
 
   private flag = new Uint8Array(0);
   private fill = new Uint32Array(0);
   private color = new Uint32Array(0);
   private glyph = new Uint16Array(0);
 
-  private an = new Int32Array(NR);
-  private asx = new Float64Array(NR);
-  private asy = new Float64Array(NR);
-  private asxx = new Float64Array(NR);
-  private asyy = new Float64Array(NR);
-  private asxy = new Float64Array(NR);
+  private an = new Int32Array(9);
+  private asx = new Float64Array(9);
+  private asy = new Float64Array(9);
+  private asxx = new Float64Array(9);
+  private asyy = new Float64Array(9);
+  private asxy = new Float64Array(9);
+  private sx = SX;
+  private sy = SY;
   private th = 0;
   private ratio = 1;
   private pxs: number[] = [];
   private pys: number[] = [];
 
-  constructor(public canvas: HTMLCanvasElement) {
+  /** Paint characters over whatever is already on the canvas: no background, no clearing (the text and front layers). */
+  private overlay = false;
+
+  constructor(public canvas: HTMLCanvasElement, opts: { overlay?: boolean } = {}) {
+    this.overlay = !!opts.overlay;
     const ctx = canvas.getContext("2d", { alpha: false });
     if (!ctx) throw new Error("2D canvas unavailable");
     this.ctx = ctx;
     const mg = this.mask.getContext("2d", { willReadFrequently: true });
     if (!mg) throw new Error("2D canvas unavailable");
     this.mg = mg;
+    this.setRoles({ bg: "#000000", red: "#ff1400", blue: "#3257ff", line: "#ffb4a8", text: "#ffffff" });
   }
+
+  /** Faint cell grid behind the characters. */
+  grid = true;
+  setGrid(on: boolean) { this.grid = on; this.bgDirty = true; }
 
   /** Minimum stroke width (px) so thin lines still register as a glyph. */
   get minLw() {
@@ -140,7 +177,35 @@ export class AsciiSurface {
 
   setRoles(r: Roles) {
     const rt = tones(r.red), bt = tones(r.blue);
-    this.roles = [r.bg, r.red, r.blue, r.line, r.text, rt.dark, rt.light, bt.dark, bt.light].map(hex2rgb);
+    const hexes = [r.bg, r.red, r.blue, r.line, r.text, rt.dark, rt.light, bt.dark, bt.light];
+    const fam = BASE_FAM.slice(), sets = BASE_SETS.slice(), tone = BASE_TONE.slice();
+    let f = 5;
+    for (const [kind, hex] of Object.entries(r.kinds || {})) {
+      const g = KIND_GLYPHS[kind];
+      if (!g) continue;
+      const t = tones(hex);
+      hexes.push(t.dark, hex, t.light);
+      fam.push(f, f, f);
+      tone.push(1, 0, 2);
+      sets.push(g[0], g[1], g[2]);
+      f++;
+    }
+    this.roles = hexes.map(hex2rgb);
+    this.fam = fam; this.sets = sets; this.tone = tone; this.nr = hexes.length;
+    const n = this.nr;
+    this.an = new Int32Array(n); this.asx = new Float64Array(n); this.asy = new Float64Array(n);
+    this.asxx = new Float64Array(n); this.asyy = new Float64Array(n); this.asxy = new Float64Array(n);
+    // colour lookup: every 15-bit colour -> the nearest role (0 = background)
+    const lut = this.lut, rr = this.roles, bg = rr[0];
+    for (let i = 0; i < 32768; i++) {
+      const cr = ((i >> 10) & 31) * 8 + 4, cg = ((i >> 5) & 31) * 8 + 4, cb = (i & 31) * 8 + 4;
+      let best = 0, bd = (cr - bg[0]) ** 2 + (cg - bg[1]) ** 2 + (cb - bg[2]) ** 2;
+      for (let k = 1; k < n; k++) {
+        const q = rr[k], d = (cr - q[0]) ** 2 + (cg - q[1]) ** 2 + (cb - q[2]) ** 2;
+        if (d < bd) { bd = d; best = k; }
+      }
+      lut[i] = best;
+    }
     this.bgDirty = true;
   }
 
@@ -156,15 +221,17 @@ export class AsciiSurface {
     this.canvas.height = Math.round(H * dpr);
     this.bgCanvas.width = this.canvas.width;
     this.bgCanvas.height = this.canvas.height;
-    this.mask.width = this.cols * SX;
-    this.mask.height = this.rows * SY;
+    this.sx = clamp(Math.round(cw / 2.2), 1, SX);
+    this.sy = clamp(Math.round(ch / 2.2), 1, SY);
+    this.mask.width = this.cols * this.sx;
+    this.mask.height = this.rows * this.sy;
     const n = this.cols * this.rows;
     this.flag = new Uint8Array(n);
     this.fill = new Uint32Array(n);
     this.color = new Uint32Array(n);
     this.glyph = new Uint16Array(n);
-    this.pxs = Array.from({ length: SX }, (_, i) => ((i + 0.5) * cw) / SX);
-    this.pys = Array.from({ length: SY }, (_, j) => ((j + 0.5) * ch) / SY);
+    this.pxs = Array.from({ length: this.sx }, (_, i) => ((i + 0.5) * cw) / this.sx);
+    this.pys = Array.from({ length: this.sy }, (_, j) => ((j + 0.5) * ch) / this.sy);
     this.bgDirty = true;
   }
 
@@ -174,7 +241,7 @@ export class AsciiSurface {
     g.setTransform(1, 0, 0, 1, 0, 0);
     g.fillStyle = css(pack(...this.roles[0]));
     g.fillRect(0, 0, this.mask.width, this.mask.height);
-    g.setTransform(SX / this.cw, 0, 0, SY / this.ch, 0, 0);
+    g.setTransform(this.sx / this.cw, 0, 0, this.sy / this.ch, 0, 0);
     return g;
   }
 
@@ -188,6 +255,7 @@ export class AsciiSurface {
     const b = this.roles[0];
     const light = (0.3 * b[0] + 0.59 * b[1] + 0.11 * b[2]) / 255 > 0.5;
     g.setTransform(1, 0, 0, 1, 0, 0);
+    if (!this.grid) { this.bgDirty = false; return; }
     g.strokeStyle = light ? "rgba(30,34,60,0.055)" : "rgba(255,255,255,0.045)";
     g.lineWidth = 1;
     g.beginPath();
@@ -208,8 +276,8 @@ export class AsciiSurface {
   /** Principal axis of one family's sub-pixels (all its tones together) inside the current cell. */
   private axis(f: number) {
     let n = 0, sx = 0, sy = 0, sxx = 0, syy = 0, sxy = 0;
-    for (let k = 1; k < NR; k++) {
-      if (FAM[k] !== f) continue;
+    for (let k = 1; k < this.nr; k++) {
+      if (this.fam[k] !== f) continue;
       n += this.an[k]; sx += this.asx[k]; sy += this.asy[k]; sxx += this.asxx[k]; syy += this.asyy[k]; sxy += this.asxy[k];
     }
     if (n === 0) { this.th = 0; this.ratio = 1; return; }
@@ -227,13 +295,14 @@ export class AsciiSurface {
 
   /** Read the mask back, turn it into cells and paint them. `t` is in seconds. */
   present(t: number) {
-    const { cols, rows, cw, ch, roles, flag, fill, color, glyph, an, asx, asy, asxx, asyy, asxy, pxs, pys } = this;
+    const { cols, rows, cw, ch, roles, flag, fill, color, glyph, an, asx, asy, asxx, asyy, asxy, pxs, pys, fam, sets, tone, nr, lut } = this;
     if (!cols) return;
-    const w = cols * SX;
-    const h = rows * SY;
+    const SXn = this.sx, SYn = this.sy;
+    const w = cols * SXn;
+    const h = rows * SYn;
     const data = this.mg.getImageData(0, 0, w, h).data;
     flag.fill(CELL_NONE);
-    const N = SX * SY;
+    const N = SXn * SYn;
     const bg = roles[0];
     const [bgR, bgG, bgB] = bg;
     const rr = roles;
@@ -241,31 +310,25 @@ export class AsciiSurface {
     for (let r = 0; r < rows; r++) {
       for (let c = 0; c < cols; c++) {
         an.fill(0); asx.fill(0); asy.fill(0); asxx.fill(0); asyy.fill(0); asxy.fill(0);
-        for (let j = 0; j < SY; j++) {
-          const row = (r * SY + j) * w + c * SX;
+        for (let j = 0; j < SYn; j++) {
+          const row = (r * SYn + j) * w + c * SXn;
           const py = pys[j];
-          for (let i = 0; i < SX; i++) {
+          for (let i = 0; i < SXn; i++) {
             const o = (row + i) * 4;
             const cr = data[o], cg = data[o + 1], cb = data[o + 2];
             if (cr === bgR && cg === bgG && cb === bgB) continue;
-            let best = 0;
-            let bd = (cr - bgR) * (cr - bgR) + (cg - bgG) * (cg - bgG) + (cb - bgB) * (cb - bgB);
-            for (let k = 1; k < NR; k++) {
-              const q = rr[k];
-              const d = (cr - q[0]) * (cr - q[0]) + (cg - q[1]) * (cg - q[1]) + (cb - q[2]) * (cb - q[2]);
-              if (d < bd) { bd = d; best = k; }
-            }
+            const best = lut[((cr >> 3) << 10) | ((cg >> 3) << 5) | (cb >> 3)];
             if (best === 0) continue;
             const px = pxs[i];
             an[best]++; asx[best] += px; asy[best] += py; asxx[best] += px * px; asyy[best] += py * py; asxy[best] += px * py;
           }
         }
         let total = 0;
-        for (let k = 1; k < NR; k++) total += an[k];
+        for (let k = 1; k < nr; k++) total += an[k];
         if (total < 3) continue;
         let dom = 1;
-        for (let k = 2; k < NR; k++) if (an[k] > an[dom]) dom = k;
-        const domFam = FAM[dom];
+        for (let k = 2; k < nr; k++) if (an[k] > an[dom]) dom = k;
+        const domFam = fam[dom];
         const cov = total / N;
         const idx = r * cols + c;
         const key = (hash3(c, r, 17) * 4294967295) >>> 0;
@@ -280,7 +343,7 @@ export class AsciiSurface {
         if (solid) {
           // a second family in the cell, e.g. a flower's swirl line over its petals
           let sec = 0;
-          for (let k = 1; k < NR; k++) if (FAM[k] !== domFam && an[k] >= 4 && (sec === 0 || an[k] > an[sec])) sec = k;
+          for (let k = 1; k < nr; k++) if (fam[k] !== domFam && an[k] >= 4 && (sec === 0 || an[k] > an[sec])) sec = k;
           let fillC: RGB;
           let glyphC: RGB;
           let ch0: string;
@@ -289,13 +352,14 @@ export class AsciiSurface {
             glyphC = base;
           } else {
             // highlights stay bright, shadows sink a little into the background
-            fillC = mix(base, bg, dom === 6 || dom === 8 ? 0.05 : dom === 5 || dom === 7 ? 0.3 : 0.2);
+            const tn = tone[dom];
+            fillC = mix(base, bg, tn === 2 ? 0.05 : tn === 1 ? 0.3 : 0.2);
             glyphC = onFill(fillC);
           }
-          const set = SETS[dom];
+          const set = sets[dom];
           ch0 = set[(key >>> 8) % set.length];
           if (sec) {
-            this.axis(FAM[sec]);
+            this.axis(fam[sec]);
             glyphC = rr[sec];
             ch0 = this.ratio > 1.6 ? lineGlyph(this.th) : "o";
           }
@@ -322,16 +386,29 @@ export class AsciiSurface {
   }
 
   private draw() {
-    if (this.bgDirty) this.paintBackground();
+    if (this.bgDirty && !this.overlay) this.paintBackground();
     const { ctx, cols, rows, cw, ch, flag, fill, color, glyph, dpr } = this;
     ctx.setTransform(1, 0, 0, 1, 0, 0);
-    ctx.drawImage(this.bgCanvas, 0, 0);
+    if (!this.overlay) ctx.drawImage(this.bgCanvas, 0, 0);
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.font = `700 ${Math.round(ch * 0.78)}px ${this.fontFamily}`;
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
     let last = -1;
     const n = cols * rows;
+    if (ch < 5) {
+      // fine mosaic: one coloured block per cell
+      for (let i = 0; i < n; i++) {
+        const f = flag[i];
+        if (!f) continue;
+        const x = (i % cols) * cw;
+        const y = ((i / cols) | 0) * ch;
+        const c = f === CELL_SOLID ? fill[i] : color[i];
+        if (c !== last) { ctx.fillStyle = css(c); last = c; }
+        ctx.fillRect(x, y, cw, ch);
+      }
+      return;
+    }
     for (let i = 0; i < n; i++) {
       const f = flag[i];
       if (!f) continue;
@@ -350,8 +427,8 @@ export class AsciiSurface {
     }
   }
 
-  /** The last presented frame as an SVG made of text. */
-  toSVG() {
+  /** The last presented frame as SVG pieces: colour blocks, and a text group sized to this grid's characters. */
+  svgParts() {
     const { cols, rows, cw, ch, flag, fill, color, glyph } = this;
     const hex = (p: number) => "#" + (p | 0x1000000).toString(16).slice(1);
     const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
@@ -365,13 +442,49 @@ export class AsciiSurface {
       if (f === CELL_SOLID) blocks.push(`<rect x="${x}" y="${y}" width="${cw}" height="${ch}" fill="${hex(fill[i])}"/>`);
       texts.push(`<text x="${(x + cw / 2).toFixed(1)}" y="${(y + ch / 2 + 1).toFixed(1)}" fill="${hex(color[i])}">${esc(String.fromCharCode(glyph[i]))}</text>`);
     }
-    const bg = hex(pack(...this.roles[0]));
-    const W = cols * cw;
-    const H = rows * ch;
+    return {
+      blocks: blocks.join(""),
+      text: `<g font-family="JetBrains Mono, DM Mono, monospace" font-weight="700" font-size="${Math.round(ch * 0.78)}" text-anchor="middle" dominant-baseline="central">${texts.join("")}</g>`,
+      bg: hex(pack(...this.roles[0])),
+      W: cols * cw,
+      H: rows * ch,
+    };
+  }
+}
+
+/**
+ * Three layers of characters on one canvas, so the type and the flowers can each have their own character size:
+ * flowers behind the type, then the type, then flowers in front. The flower layers share one grid size and the type
+ * has its own.
+ */
+export class LayeredSurface {
+  readonly back: AsciiSurface;
+  readonly text: AsciiSurface;
+  readonly front: AsciiSurface;
+
+  constructor(public canvas: HTMLCanvasElement) {
+    this.back = new AsciiSurface(canvas);
+    this.text = new AsciiSurface(canvas, { overlay: true });
+    this.front = new AsciiSurface(canvas, { overlay: true });
+  }
+
+  setRoles(r: Roles) { this.back.setRoles(r); this.text.setRoles(r); this.front.setRoles(r); }
+  /** The faint grid is drawn once, at the flowers' cell size. */
+  setGrid(on: boolean) { this.back.setGrid(on); }
+
+  resize(W: number, H: number, dpr: number, fcw: number, fch: number, tcw: number, tch: number) {
+    this.back.resize(W, H, dpr, fcw, fch);
+    this.text.resize(W, H, dpr, tcw, tch);
+    this.front.resize(W, H, dpr, fcw, fch);
+  }
+
+  /** The last presented frame as an SVG made of text, all three layers in order. */
+  toSVG() {
+    const a = this.back.svgParts(), b = this.text.svgParts(), c = this.front.svgParts();
     return (
-      `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">` +
-      `<rect width="100%" height="100%" fill="${bg}"/>${blocks.join("")}` +
-      `<g font-family="JetBrains Mono, DM Mono, monospace" font-weight="700" font-size="${Math.round(ch * 0.78)}" text-anchor="middle" dominant-baseline="central">${texts.join("")}</g></svg>`
+      `<svg xmlns="http://www.w3.org/2000/svg" width="${a.W}" height="${a.H}" viewBox="0 0 ${a.W} ${a.H}">` +
+      `<rect width="100%" height="100%" fill="${a.bg}"/>` +
+      `${a.blocks}${a.text}${b.blocks}${b.text}${c.blocks}${c.text}</svg>`
     );
   }
 }

@@ -5,8 +5,29 @@
  * original; every pixel goes through AsciiSurface, so the whole garden is made of text.
  * The frame loop runs on GSAP's ticker.
  */
-import gsap from "gsap";
-import { AsciiSurface, clamp, tones } from "./ascii";
+import { LayeredSurface, clamp, tones } from "./ascii";
+import type { AsciiSurface } from "./ascii";
+
+/** Anything with add/remove for a per-frame callback. The app passes GSAP's ticker; the standalone export uses this. */
+export interface Ticker { add(fn: () => void): void; remove(fn: () => void): void }
+function rafTicker(): Ticker {
+  const fns = new Set<() => void>();
+  let id = 0;
+  const loop = () => { id = requestAnimationFrame(loop); fns.forEach(f => f()); };
+  return {
+    add(f) { fns.add(f); if (!id) id = requestAnimationFrame(loop); },
+    remove(f) { fns.delete(f); if (!fns.size && id) { cancelAnimationFrame(id); id = 0; } },
+  };
+}
+
+export interface StartOptions {
+  /** Per-frame driver. Defaults to requestAnimationFrame. */
+  ticker?: Ticker;
+  /** Where key presses are listened for. Defaults to window. */
+  keyTarget?: Window | HTMLElement;
+  /** Embedded use: no poster, no page-level side effects, no autofocus. */
+  embed?: boolean;
+}
 
 export type Mode = "type" | "poster";
 
@@ -15,6 +36,8 @@ export interface Callbacks {
   onBusy: (b: boolean) => void;
   /** Number of live letters, so the UI can show an empty state. */
   onCount?: (n: number) => void;
+  /** The text on the garden, every time it changes (so it can be saved). */
+  onText?: (text: string) => void;
 }
 
 export const PRESETS = [
@@ -41,20 +64,62 @@ export const PAL: string[][] = [
   ["Mono", "#000000", "#F2F2F2", "#6E6E6E", "#000000", "#FFFFFF"],
 ];
 
+/** Flower sets the UI can pick from. "mixed" draws from every species. */
+export const FLOWERS = [
+  { id: "rose", label: "Rose", glyph: "@" },
+  { id: "tulip", label: "Tulip", glyph: "Y" },
+  { id: "daisy", label: "Daisy", glyph: "*" },
+  { id: "poppy", label: "Poppy", glyph: "O" },
+  { id: "blossom", label: "Blossom", glyph: "%" },
+  { id: "lily", label: "Lily", glyph: "&" },
+  { id: "bell", label: "Bell", glyph: "n" },
+  { id: "lavender", label: "Lavender", glyph: "!" },
+  { id: "fern", label: "Fern", glyph: "/" },
+  { id: "dandelion", label: "Puff", glyph: "o" },
+];
+/** Each species' own default colour. The rose follows the palette's flower colour. */
+const KIND_COLOR: Record<string, string> = {
+  tulip: "#FF8A1F", daisy: "#FFE14D", poppy: "#FF3B6B", blossom: "#FFB6D6", lily: "#E27BFF",
+  bell: "#5FB2FF", lavender: "#9A78FF", fern: "#45D483", dandelion: "#EDEBD8",
+};
+/** The default colour of a species on a palette: its own hue, pulled toward the type colour if it would vanish into the background. */
+export function defaultKindColor(kind: string, palRow: string[]): string {
+  const hex = kind === "rose" ? palRow[2] : KIND_COLOR[kind] || palRow[2];
+  const v = (h: string) => [parseInt(h.slice(1, 3), 16), parseInt(h.slice(3, 5), 16), parseInt(h.slice(5, 7), 16)];
+  const c = v(hex), b = v(palRow[1]);
+  if (Math.hypot(c[0] - b[0], c[1] - b[1], c[2] - b[2]) >= 110) return hex;
+  const t = v(palRow[5]);
+  const m = (i: number) => Math.round(c[i] + (t[i] - c[i]) * 0.5).toString(16).padStart(2, "0");
+  return "#" + m(0) + m(1) + m(2);
+}
+/** How often each species turns up in "mixed". */
+const KIND_WEIGHT: Record<string, number> = { rose: 3, tulip: 2, daisy: 2, poppy: 2, blossom: 2, lily: 2, bell: 2, lavender: 2, fern: 1, dandelion: 1 };
+/** Size tweak per species so they sit well on a stem. */
+const KIND_SCALE: Record<string, number> = { rose: 1, tulip: 1.25, daisy: 1.25, poppy: 1.2, blossom: 1.3, lily: 1.3, bell: 1.2, lavender: 1.05, fern: 1.05, dandelion: 1.25 };
+
 const POSTER_CELL = { cw: 7, ch: 10 };
 
 export class Garden {
   [key: string]: any;
 
+  custom: Record<string, string> = {};
+  chaos = 0.3;
+  /** Character size of the flowers and of the type, each adjustable on its own (1 = default, lower = finer). */
+  cellScale = 1;
+  textScale = 1;
+  gridOn = true;
   F = '"Playfair Display",Georgia,serif';
   SENT = String.fromCharCode(0x200b); // kept in the hidden field so Backspace on an empty field still reports
   props = { boil: true, recoil: 20, density: 1 };
-  state = { mode: "type" as Mode, preset: "breathe", palette: 0, text: "in bloom", seed: 7, busy: false };
+  state = { mode: "type" as Mode, preset: "breathe", palette: 0, text: "in bloom", seed: 7, busy: false, flowers: "mixed" as string[] | string };
 
   constructor(public canvas: HTMLCanvasElement, public input: HTMLInputElement, public cb: Callbacks) {}
 
   // ---------- lifecycle ----------
-  start() {
+  start(opts: StartOptions = {}) {
+    this.opts = opts;
+    this.keyTarget = opts.keyTarget || window;
+    this.ticker = opts.ticker || rafTicker();
     this.letters = [];
     this.uid = 1;
     this.cache = {};
@@ -70,22 +135,27 @@ export class Garden {
     this.fa = {};
     this.mx = null;
     this.chCur = 14;
-    this.surface = new AsciiSurface(this.canvas);
+    this.chCurT = 14;
+    this._txt = ""; // so an empty garden at startup is not reported as a change
+    this.surface = new LayeredSurface(this.canvas);
+    this.surface.setGrid(this.gridOn);
     this.mctx = document.createElement("canvas").getContext("2d");
+    this.setFlowers(this.state.flowers);
     this.applyRoles();
 
     this.onResize = () => this.resize();
     window.addEventListener("resize", this.onResize);
     this.onKey = (e: KeyboardEvent) => this.key(e);
-    window.addEventListener("keydown", this.onKey);
-    this.onMove = (e: PointerEvent) => { this.mx = e.clientX; this.my = e.clientY; };
+    this.keyTarget.addEventListener("keydown", this.onKey);
+    // pointer positions are kept relative to the canvas so the garden also works when it is not at the page origin
+    this.onMove = (e: PointerEvent) => { const r = this.canvas.getBoundingClientRect(); this.mx = e.clientX - r.left; this.my = e.clientY - r.top; };
     this.onLeave = () => { this.mx = null; };
     window.addEventListener("pointermove", this.onMove);
     document.addEventListener("pointerleave", this.onLeave);
 
     // phone
     this.touch = !!(window.matchMedia && matchMedia("(pointer: coarse)").matches);
-    if (this.touch) document.documentElement.setAttribute("data-touch", "");
+    if (this.touch && !opts.embed) document.documentElement.setAttribute("data-touch", "");
     this.ptype = "mouse";
     this.onPD = (e: PointerEvent) => { this.ptype = e.pointerType || "mouse"; };
     window.addEventListener("pointerdown", this.onPD, true);
@@ -101,36 +171,37 @@ export class Garden {
     this.vv = window.visualViewport || null;
     this.vvMax = 0;
     this.onVV = () => this.syncVV();
-    if (this.vv && this.touch) { this.vv.addEventListener("resize", this.onVV); this.vv.addEventListener("scroll", this.onVV); this.syncVV(); }
+    if (this.vv && this.touch && !opts.embed) { this.vv.addEventListener("resize", this.onVV); this.vv.addEventListener("scroll", this.onVV); this.syncVV(); }
 
     // double-click / double-tap on the garden leaves a rose
     this.onPlant = (e: PointerEvent) => {
       if (this.state.mode !== "type" || e.target !== this.canvas) return;
-      const now = performance.now(), lp = this.lastTap;
-      this.lastTap = { t: now, x: e.clientX, y: e.clientY };
-      if (lp && now - lp.t < 340 && Math.hypot(e.clientX - lp.x, e.clientY - lp.y) < 40 && now - (this.lastPlant || 0) > 1800) {
+      const now = performance.now(), lp = this.lastTap, b = this.canvas.getBoundingClientRect();
+      const lx = e.clientX - b.left, ly = e.clientY - b.top;
+      this.lastTap = { t: now, x: lx, y: ly };
+      if (lp && now - lp.t < 340 && Math.hypot(lx - lp.x, ly - lp.y) < 40 && now - (this.lastPlant || 0) > 1800) {
         this.lastPlant = now;
         this.lastTap = null;
-        this.liveRose({ x: Math.round((e.clientX / this.W) * 1000) / 1000, y: Math.round((e.clientY / this.H) * 1000) / 1000, s: Math.floor(Math.random() * 1e6) });
+        this.liveRose({ x: Math.round((lx / this.W) * 1000) / 1000, y: Math.round((ly / this.H) * 1000) / 1000, s: Math.floor(Math.random() * 1e6) });
       }
     };
     window.addEventListener("pointerdown", this.onPlant);
 
     this.resize();
-    if (document.fonts) document.fonts.load(`700 100px ${this.F}`).then(() => { this.cache = {}; this.layout(); this.buildPoster(); }).catch(() => {});
+    if (document.fonts) document.fonts.load(`700 100px ${this.F}`).then(() => { this.cache = {}; this.layout(); if (!opts.embed) this.buildPoster(); }).catch(() => {});
     this.vmime = typeof MediaRecorder !== "undefined"
       ? ["video/mp4;codecs=avc1.42E01E", "video/mp4", "video/webm;codecs=vp9", "video/webm"].find(m => MediaRecorder.isTypeSupported(m)) || null
       : null;
-    this.buildPoster();
+    if (!opts.embed) this.buildPoster();
     this.tick = () => this.frame();
-    gsap.ticker.add(this.tick);
-    if (!this.touch) setTimeout(() => this.input && this.input.focus({ preventScroll: true }), 50);
+    this.ticker.add(this.tick);
+    if (!this.touch && !opts.embed) setTimeout(() => this.input && this.input.focus({ preventScroll: true }), 50);
   }
 
   destroy() {
-    if (this.tick) gsap.ticker.remove(this.tick);
+    if (this.tick && this.ticker) this.ticker.remove(this.tick);
     window.removeEventListener("resize", this.onResize);
-    window.removeEventListener("keydown", this.onKey);
+    if (this.keyTarget) this.keyTarget.removeEventListener("keydown", this.onKey);
     window.removeEventListener("pointermove", this.onMove);
     document.removeEventListener("pointerleave", this.onLeave);
     window.removeEventListener("pointerdown", this.onPD, true);
@@ -142,17 +213,67 @@ export class Garden {
   }
 
   // ---------- public controls (called by the React UI) ----------
+  /** The colour a species is drawn in: the user's tweak if there is one, else its default on the current palette. */
+  kindColor(kind: string): string { return this.custom[kind] || defaultKindColor(kind, this.PALrow()); }
+  /** Replace the user's colour tweaks (kind -> hex). Flowers already on screen recolour immediately. */
+  setKindColors(map: Record<string, string>) { this.custom = { ...map }; this.applyRoles(); }
   roles() {
     const p = this.PALrow();
-    return { bg: p[1], red: p[2], blue: p[3], line: p[4], text: p[5] };
+    const kinds: Record<string, string> = {};
+    for (const k of Object.keys(KIND_COLOR)) kinds[k] = this.kindColor(k);
+    return { bg: p[1], red: this.kindColor("rose"), blue: p[3], line: p[4], text: p[5], kinds };
   }
-  PALrow() { return PAL[this.state.palette] || PAL[0]; }
+  PALrow() { return this.customRow || PAL[this.state.palette] || PAL[0]; }
+  /** Use a palette row that is not in the built-in list (name, background, flower, stem, line, type). Used by the code export. */
+  setCustomPalette(row: string[]) { this.customRow = row; this.applyRoles(); }
   applyRoles() {
+    this._ver = (this._ver || 0) + 1;
     const r = this.roles();
     if (this.surface) this.surface.setRoles(r);
     if (this.pSurface) this.pSurface.setRoles(r);
   }
   setPalette(i: number) { this.state.palette = i; this.applyRoles(); }
+  /**
+   * Which species new flowers are drawn from: any subset, so people can build their own mix.
+   * With every species selected the default weighting applies (roses a little more often); with a custom
+   * subset each chosen species is equally likely. Flowers already grown keep their kind.
+   */
+  setFlowers(ids: string[] | string) {
+    const all = Object.keys(KIND_WEIGHT);
+    let list = Array.isArray(ids) ? ids : ids === "mixed" ? all : [ids];
+    list = list.filter(k => KIND_WEIGHT[k]);
+    if (!list.length) list = all;
+    this.state.flowers = list;
+    const weighted = list.length === all.length;
+    this.kinds = [];
+    for (const k of list) for (let i = 0; i < (weighted ? KIND_WEIGHT[k] : 1); i++) this.kinds.push(k);
+  }
+  pickKind(r: () => number): string {
+    return this.kinds[Math.floor(r() * this.kinds.length)] || "rose";
+  }
+  /**
+   * Swap the species of every flower already on screen to the current selection, in place: stems and letters stay put,
+   * each flower picks a new kind and blooms again with a small stagger. This is what makes changing the mix feel live.
+   */
+  rekind() {
+    const now = performance.now();
+    let n = 0;
+    for (const l of this.letters) {
+      if (l.dead || l.ch === " ") continue;
+      const age = (now - l.birth);
+      for (const list of [l.els, l.endEls]) {
+        if (!list) continue;
+        for (const e of list) {
+          if (e.t !== "rose") continue;
+          const base = e.R / (KIND_SCALE[e.kind || "rose"] || 1);
+          e.kind = this.pickKind(this.rng(e.id * 7919 + this.kinds.length * 31 + 5));
+          e.R = base * (KIND_SCALE[e.kind] || 1);
+          e.d0 = age + 30 * (n++ % 12); // restart this flower's bloom
+        }
+      }
+    }
+    this.lastKey = now;
+  }
   setMode(m: Mode) {
     this.state.mode = m;
     if (m === "type") requestAnimationFrame(() => { this.resize(); this.input && this.input.focus({ preventScroll: true }); });
@@ -164,9 +285,10 @@ export class Garden {
   attachPoster(c: HTMLCanvasElement | null) {
     this.pcanvas = c;
     if (!c) { this.pSurface = null; return; }
-    this.pSurface = new AsciiSurface(c);
+    this.pSurface = new LayeredSurface(c);
+    this.pSurface.setGrid(false); // no grid: it would draw the poster's square edge on the page
     this.pSurface.setRoles(this.roles());
-    this.pSurface.resize(1080, 1080, 1, POSTER_CELL.cw, POSTER_CELL.ch);
+    this.applyPosterCells();
     this.pt0 = performance.now();
   }
   liveText(): string { return (this.letters || []).filter((l: any) => !l.dead).map((l: any) => l.ch).join("").trim(); }
@@ -177,7 +299,7 @@ export class Garden {
     // touch: leave focus (and the keyboard) where it is while tapping; the tap's click opens the keyboard
     if (touch) { if (ev.cancelable && (onCanvas || (ev.target.closest && ev.target.closest("button")))) ev.preventDefault(); }
     else this.input.focus({ preventScroll: true });
-    if (onCanvas) this.spawnFly(ev.clientX, ev.clientY);
+    if (onCanvas) { const b = this.canvas.getBoundingClientRect(); this.spawnFly(ev.clientX - b.left, ev.clientY - b.top); }
   }
   appClick(ev: any) {
     if (this.state.mode === "type" && this.input && this.ptype !== "mouse" && ev.target === this.canvas) this.input.focus({ preventScroll: true });
@@ -360,13 +482,28 @@ export class Garden {
     this.W = r.width; this.H = r.height; this.dpr = d;
     this.layout(true);
     this.chCur = this.targetCh();
+    this.chCurT = this.targetChT();
     this.applyCell();
   }
   /** Bigger type gets bigger characters; wrapped type gets finer ones so letters stay readable. */
-  targetCh() { return clamp((this.St || this.H * 0.28) / 17, 7, 12); }
+  targetCh() { return clamp(((this.St || this.H * 0.28) / 17) * this.cellScale, 2, 18); }
+  targetChT() { return clamp(((this.St || this.H * 0.28) / 17) * this.textScale, 2, 22); }
+  /** Scales the flowers' character size: below 1 is finer and more detailed, above 1 is chunkier. */
+  setCellScale(v: number) { this.cellScale = clamp(v, 0, 1.8); if (this.surface && this.W) { this.chCur = this.targetCh(); this.applyCell(); } this.applyPosterCells(); }
+  /** The same for the type, on its own: the letters can be fine while the flowers are chunky, or the other way round. */
+  setTextScale(v: number) { this.textScale = clamp(v, 0, 1.8); if (this.surface && this.W) { this.chCurT = this.targetChT(); this.applyCell(); } this.applyPosterCells(); }
+  /** [flower cw, flower ch, text cw, text ch] for the 1080 poster. */
+  posterCells() {
+    const f = Math.max(2, Math.round(POSTER_CELL.ch * this.cellScale)), t = Math.max(2, Math.round(POSTER_CELL.ch * this.textScale));
+    return [Math.max(1, Math.round(f / 1.43)), f, Math.max(1, Math.round(t / 1.43)), t] as const;
+  }
+  applyPosterCells() { if (this.pSurface) this.pSurface.resize(1080, 1080, 1, ...this.posterCells()); }
+  setBoil(on: boolean) { this.props.boil = on; }
+  setRecoil(v: number) { this.props.recoil = v; }
+  setGrid(on: boolean) { if (this.surface) this.surface.setGrid(on); this.gridOn = on; }
   applyCell() {
-    const ch = Math.round(this.chCur), cw = Math.max(6, Math.round(ch / 1.45));
-    this.surface.resize(this.W, this.H, this.dpr, cw, ch);
+    const f = Math.round(this.chCur), t = Math.round(this.chCurT);
+    this.surface.resize(this.W, this.H, this.dpr, Math.max(1, Math.round(f / 1.45)), f, Math.max(1, Math.round(t / 1.45)), t);
   }
   mw(ch: string) {
     if (this.cache[ch] != null) return this.cache[ch];
@@ -421,7 +558,9 @@ export class Garden {
   layout(snap?: boolean) {
     if (!this.W) return;
     const A = this.letters.filter((l: any) => !l.dead);
-    if (this.cb.onCount && A.length !== this._cnt) { this._cnt = A.length; this.cb.onCount(A.length); }
+    if (A.length !== this._cnt) { this._cnt = A.length; this.cb.onCount?.(A.length); }
+    const txt = A.map((l: any) => l.ch).join("");
+    if (txt !== this._txt) { this._txt = txt; this.cb.onText?.(txt); }
     const res = this.layoutCore(A, this.W, this.H, this.wrapped);
     this.wrapped = res.wrapped;
     A.forEach((l: any) => { if (l.x == null) { l.x = l.tx; l.y = l.ty; } });
@@ -474,6 +613,9 @@ export class Garden {
   // ---------- input ----------
   key(e: KeyboardEvent) {
     if (this.state.mode !== "type") return;
+    // let people type into other fields (the code export's text box) without growing the garden
+    const tg = e.target as HTMLElement | null;
+    if (tg && tg !== this.input && (tg.tagName === "INPUT" || tg.tagName === "TEXTAREA" || tg.isContentEditable)) return;
     if (e.metaKey || e.ctrlKey || e.altKey) {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "s") { e.preventDefault(); e.shiftKey ? this.saveSVG() : this.savePNG(); }
       return;
@@ -509,9 +651,44 @@ export class Garden {
   }
 
   // ---------- growth ----------
+  /**
+   * Chaos (0..1) scales the whole garden: 0 is minimal botanical typography (a stem or two, small blooms, few leaves),
+   * 1 is the garden taking over (many stems and branches, big flowers everywhere, leaves, jitter).
+   * 0.3 matches the original Type Garden.
+   */
+  setChaos(v: number) { this.chaos = clamp(v, 0, 1); }
+  /** Put words on the garden already fully grown (no typing, no bloom): what the code export starts from. */
+  seed(text: string) {
+    const now = performance.now();
+    for (const ch of text) this.add(ch, now);
+    for (const l of this.letters) { l.birth -= 6000; l.tb = l.birth; if (l.cut != null) l.cut -= 6000; }
+  }
+  /** Grow every letter on screen again with the current chaos and species, so the change can be watched. */
+  regrow() {
+    const now = performance.now();
+    const A = this.letters.filter((l: any) => !l.dead);
+    A.forEach((l: any, i: number) => {
+      if (l.ch === " ") return;
+      this.gen(l);
+      l.birth = now + i * 45; l.tb = l.birth; l.cut = null; l.endEls = null;
+      const nx = A[i + 1];
+      if (nx && nx.ch === " ") { l.cut = l.birth + 240; this.genEnd(l, 240); }
+    });
+    this.lastKey = now;
+  }
   wordParams(ws: number) {
-    const r = this.rng(ws * 7 + 13), dens = this.props.density ?? 1;
-    return { roseP: 0.3 + r() * 0.3, leafy: (0.6 + r() * 0.8) * dens, dens, lean: (r() - 0.5) * 0.6, big: 0.85 + r() * 0.45, curvy: 0.8 + r() * 0.6, bridgeP: Math.min(0.95, (0.45 + r() * 0.35) * dens), w: 0.5 };
+    const r = this.rng(ws * 7 + 13), c = this.chaos ?? 0.3;
+    const dens = (this.props.density ?? 1) * (0.25 + c * 2.4) / 0.97;
+    return {
+      roseP: Math.min(0.92, (0.3 + r() * 0.3) * (0.45 + c * 1.5)),
+      leafy: (0.6 + r() * 0.8) * dens, dens,
+      lean: (r() - 0.5) * 0.6 * (0.6 + c * 1.2),
+      big: (0.85 + r() * 0.45) * (0.8 + c * 0.45),
+      curvy: (0.8 + r() * 0.6) * (0.7 + c * 0.9),
+      bridgeP: Math.min(0.97, (0.45 + r() * 0.35) * dens),
+      len: 0.78 + c * 0.75,
+      w: 0.5,
+    };
   }
   grow(r: () => number, E: any[], nid: () => number, p: any, o: any) {
     const tip = o.tip || (r() < p.roseP ? "rose" : r() < 0.45 ? "fan" : r() < 0.6 ? "leaf" : "curl");
@@ -530,19 +707,20 @@ export class Garden {
     }
     const [tp, ta] = this.at(P, 1), td = o.d0 + dur * 0.8, tl = this.layerAt(segs, 1);
     if (tip === "rose") {
-      const R = (0.13 + r() * 0.15) * p.big * (o.depth ? 0.75 : 1);
-      // legibility: a rose sitting over the letter body mostly goes behind it
+      const kind = this.pickKind(r);
+      const R = (0.13 + r() * 0.15) * p.big * (o.depth ? 0.75 : 1) * (KIND_SCALE[kind] || 1);
+      // legibility: a flower sitting over the letter body mostly goes behind it
       const over = tp[1] > -0.78 && tp[1] < 0.05 && Math.abs(tp[0]) < p.w * 0.5;
       const layer = over ? (r() < 0.22 ? 1 : 0) : (r() < 0.6 ? 1 : tl);
-      E.push({ t: "rose", id: nid(), x: tp[0], y: tp[1], R, rot: (r() - 0.5) * 1.0, ph1: r() * 6.28, ph2: r() * 6.28, turns: 1.8 + r() * 1, layer, d0: td });
-      if (r() < 0.2) { const oo = ta + (r() < 0.5 ? 1 : -1) * 1.3; E.push({ t: "rose", id: nid(), x: tp[0] + Math.cos(oo) * R * 1.4, y: tp[1] + Math.sin(oo) * R * 1.4, R: R * (0.6 + r() * 0.3), rot: (r() - 0.5) * 1.2, ph1: r() * 6.28, ph2: r() * 6.28, turns: 1.8 + r(), layer, d0: td + 120 }); }
+      E.push({ t: "rose", kind, id: nid(), x: tp[0], y: tp[1], R, rot: (r() - 0.5) * 1.0, ph1: r() * 6.28, ph2: r() * 6.28, turns: 1.8 + r() * 1, layer, d0: td });
+      if (r() < 0.2) { const oo = ta + (r() < 0.5 ? 1 : -1) * 1.3; E.push({ t: "rose", kind, id: nid(), x: tp[0] + Math.cos(oo) * R * 1.4, y: tp[1] + Math.sin(oo) * R * 1.4, R: R * (0.6 + r() * 0.3), rot: (r() - 0.5) * 1.2, ph1: r() * 6.28, ph2: r() * 6.28, turns: 1.8 + r(), layer, d0: td + 120 }); }
     } else if (tip === "fan") {
       const spread = 0.6 + r() * 0.3;
       for (let j = 0; j < 2; j++) E.push({ t: "leaf", id: nid(), x: tp[0], y: tp[1], a: ta + (j - 0.5) * spread, L: 0.2 + r() * 0.2, bend: (j - 0.5) * 0.8, layer: tl, d0: td + j * 60 });
     } else if (tip === "leaf") {
       E.push({ t: "leaf", id: nid(), x: tp[0], y: tp[1], a: ta + (r() - 0.5) * 0.3, L: 0.16 + r() * 0.16, bend: (r() - 0.5), layer: tl, d0: td });
     }
-    if (!o.depth && r() < 0.3) {
+    if (!o.depth && r() < Math.min(0.85, 0.3 * p.dens)) {
       const u = 0.35 + r() * 0.35, [q, a] = this.at(P, u);
       this.grow(r, E, nid, p, { base: q, dir: a + (r() < 0.5 ? -1 : 1) * (0.7 + r() * 0.4), len: (o.len || 0.8) * (0.35 + r() * 0.2), d0: o.d0 + dur * u, depth: 1, layer0: this.layerAt(segs, u) });
     }
@@ -552,11 +730,12 @@ export class Garden {
     const r = this.rng((l.ws ^ Math.imul(l.wi + 1, 2654435761)) + Math.floor(this.rand() * 1e6));
     const p = this.wordParams(l.ws), E: any[] = []; let k0 = 0; const nid = () => l.id * 100 + (k0++);
     const w = this.mw(l.ch), inX = () => (r() - 0.5) * w * 0.7; p.w = w;
-    const nUp = 1 + (r() < 0.45 * p.dens ? 1 : 0);
+    let nUp = 1;
+    for (let k = 0; k < 4; k++) if (r() < 0.45 * p.dens * (k ? 0.7 : 1)) nUp++;
     for (let i = 0; i < nUp; i++) {
-      this.grow(r, E, nid, p, { base: [inX(), -r() * 0.3], dir: -Math.PI / 2 + p.lean * 0.5 + (r() - 0.5) * 0.7, len: 0.6 + r() * 0.5, d0: 40 + i * 130, tip: l.wi === 0 && i === 0 ? "rose" : null });
+      this.grow(r, E, nid, p, { base: [inX(), -r() * 0.3], dir: -Math.PI / 2 + p.lean * 0.5 + (r() - 0.5) * 0.7, len: (0.6 + r() * 0.5) * p.len, d0: 40 + i * 110, tip: l.wi === 0 && i === 0 ? "rose" : null });
     }
-    if (r() < 0.4 * p.dens) this.grow(r, E, nid, p, { base: [inX(), -0.1 - r() * 0.35], dir: Math.PI / 2 + (r() - 0.5) * 0.8, len: 0.35 + r() * 0.35, d0: 160 });
+    if (r() < Math.min(0.95, 0.4 * p.dens)) this.grow(r, E, nid, p, { base: [inX(), -0.1 - r() * 0.35], dir: Math.PI / 2 + (r() - 0.5) * 0.8, len: (0.35 + r() * 0.35) * p.len, d0: 160 });
     if (l.prev && r() < p.bridgeP) {
       const px = -(this.mw(l.prev.ch) + w) / 2;
       const a = [inX(), -0.05 - r() * 0.55], b = [px + (r() - 0.5) * 0.25, -0.05 - r() * 0.55];
@@ -620,6 +799,7 @@ export class Garden {
       if (tm) { const k = (dx * ux + dy * uy) * sq; dx += k * ux + tl![0] * R * z; dy += k * uy + tl![1] * R * z; }
       return [cx + dx, cy + dy];
     };
+    if (e.kind && e.kind !== "rose") { this.drawKind(B, T, R, e, a); return; }
     // petals, back to front: [cx, cy, rx, ry, angle, depth, edge]
     const P = [
       [0, -0.36, 0.56, 0.54, 0, 0, 0],
@@ -666,6 +846,177 @@ export class Garden {
     }
   }
 
+  // ---------- flower species ----------
+  /** A teardrop petal or leaflet from (ox, oy) outward along `ang`, in px offsets from the flower centre, with a radial shade. */
+  petal(B: any, T: any, ox: number, oy: number, ang: number, len: number, wid: number, stops: [number, string][], outline?: string, ow?: number) {
+    if (len < 1.5) return;
+    const N = 9, dx = Math.cos(ang), dy = Math.sin(ang), px = -dy, py = dx;
+    const left: number[][] = [], right: number[][] = [];
+    for (let k = 0; k <= N; k++) {
+      const u = k / N, w = wid * Math.sin(Math.PI * Math.pow(u, 0.72)) * (1 - 0.18 * u);
+      const bx = ox + dx * len * u, by = oy + dy * len * u;
+      left.push(T(bx + px * w, by + py * w));
+      right.push(T(bx - px * w, by - py * w));
+    }
+    const pts = [...left, ...right.reverse()];
+    const c = T(ox + dx * len * 0.4, oy + dy * len * 0.4);
+    B.fillGrad(pts, c[0], c[1], len * 0.75, stops);
+    if (outline) B.outline(pts, outline, ow || 1);
+  }
+  blobPts(T: any, cx: number, cy: number, rx: number, ry: number, ang: number, ph: number, n = 22) {
+    const ca = Math.cos(ang), sa = Math.sin(ang), pts: number[][] = [];
+    for (let k = 0; k < n; k++) {
+      const th = k / n * Math.PI * 2, rr = 1 + 0.07 * Math.sin(3 * th + ph);
+      const lx = Math.cos(th) * rx * rr, ly = Math.sin(th) * ry * rr;
+      pts.push(T(cx + lx * ca - ly * sa, cy + lx * sa + ly * ca));
+    }
+    return pts;
+  }
+  disc(B: any, T: any, cx: number, cy: number, r: number, stops: [number, string][], ph = 0) {
+    if (r < 0.8) return;
+    const c = T(cx, cy);
+    B.fillGrad(this.blobPts(T, cx, cy, r, r, 0, ph, 14), c[0] - r * 0.2, c[1] - r * 0.2, r * 1.25, stops);
+  }
+  /** Draw one flower of a non-rose species. T maps px offsets from the flower centre to the screen (it already carries the lean). */
+  drawKind(B: any, T: any, R: number, e: any, a: number) {
+    // this species' own colour and shades stand in for the flower colour
+    const C0 = this.cc, K = C0.kind && C0.kind[e.kind];
+    const C = K ? { ...C0, red: K.base, redD: K.dark, redL: K.light } : C0;
+    if (K && e.kind === "fern") { C.blue = K.base; C.blueD = K.dark; C.blueL = K.light; }
+    const lw = Math.max(0.8, R * 0.045), ol = R >= 26 ? C.redD : undefined;
+    const U = (i: number, st = 70) => this.spr((a - i * st) / 1000, 8, 14);
+    const lit: [number, string][] = [[0, C.redD], [0.45, C.red], [1, C.redL]]; // dark at the base, light at the tip
+    const shade: [number, string][] = [[0, C.redL], [0.5, C.red], [1, C.redD]]; // light at the base, dark at the tip
+    const TAU = Math.PI * 2;
+    switch (e.kind) {
+      case "daisy": {
+        const n = 14;
+        for (let pass = 0; pass < 2; pass++) for (let i = pass; i < n; i += 2) {
+          const s = U(i, 38); if (s <= 0.001) continue;
+          const ang = (i / n) * TAU + e.ph1;
+            this.petal(B, T, Math.cos(ang) * R * 0.2, Math.sin(ang) * R * 0.2, ang, R * 0.95 * s, R * 0.22,
+            pass ? [[0, C.redL], [1, C.red]] : [[0, C.redL], [0.7, C.redL], [1, C.red]], ol, lw * 0.5);
+        }
+        const s = U(n, 38);
+        this.disc(B, T, 0, 0, R * 0.3 * Math.min(1, s), [[0, C.red], [1, C.redD]], e.ph2);
+        break;
+      }
+      case "tulip": {
+        const s = U(0, 0); if (s <= 0.001) break;
+        const by = R * 0.55, H = R * 1.55 * s;
+        this.petal(B, T, 0, by, -Math.PI / 2 - 0.34, H, R * 0.42, shade, ol, lw);
+        this.petal(B, T, 0, by, -Math.PI / 2 + 0.34, H, R * 0.42, shade, ol, lw);
+        const s2 = Math.min(1.1, U(1, 90));
+        this.petal(B, T, 0, by, -Math.PI / 2, H * 1.04 * s2, R * 0.46, lit, ol, lw);
+        break;
+      }
+      case "poppy": {
+        const P = [[-0.42, -0.1, 0.62, 0.58, -0.25], [0.42, -0.1, 0.62, 0.58, 0.25], [-0.3, 0.3, 0.55, 0.5, 0.2], [0.3, 0.3, 0.55, 0.5, -0.2]];
+        P.forEach((q, i) => {
+          const s = U(i, 90); if (s <= 0.001) return;
+          const cx = q[0] * R * s, cy = q[1] * R * s, pts = this.blobPts(T, cx, cy, q[2] * R * s, q[3] * R * s, q[4], e.ph1 + i);
+          const c = T(cx - R * 0.1, cy - R * 0.12);
+          B.fillGrad(pts, c[0], c[1], R * 0.75 * s, i < 2 ? [[0, C.red], [0.6, C.red], [1, C.redD]] : [[0, C.redL], [0.55, C.red], [1, C.redD]]);
+          if (R >= 16) B.outline(pts, C.redD, lw * 0.6);
+        });
+        const s = U(4, 90);
+        for (let k = 0; k < 12; k++) {
+          const ang = (k / 12) * TAU + e.ph2, r0 = R * 0.2, r1 = R * (0.36 + 0.1 * Math.sin(k * 2.7)) * Math.min(1, s);
+          B.stroke([T(Math.cos(ang) * r0, Math.sin(ang) * r0), T(Math.cos(ang) * r1, Math.sin(ang) * r1)], C.redD, lw);
+        }
+        this.disc(B, T, 0, 0, R * 0.2 * Math.min(1, s), [[0, C.redD], [1, C.redD]], e.ph1);
+        break;
+      }
+      case "blossom": {
+        for (let i = 0; i < 5; i++) {
+          const s = U(i, 80); if (s <= 0.001) continue;
+          const ang = e.ph1 + (i / 5) * TAU;
+          this.petal(B, T, Math.cos(ang) * R * 0.12, Math.sin(ang) * R * 0.12, ang, R * 0.95 * s, R * 0.34, [[0, C.redD], [0.3, C.red], [1, C.redL]], ol, lw * 0.7);
+        }
+        const s = Math.min(1, U(5, 80));
+        for (let k = 0; k < 8; k++) {
+          const ang = e.ph2 + (k / 8) * TAU, len = R * (0.26 + 0.06 * Math.sin(k * 3.1)) * s;
+          B.stroke([T(0, 0), T(Math.cos(ang) * len, Math.sin(ang) * len)], C.redD, lw * 0.6);
+          if (R >= 18) this.disc(B, T, Math.cos(ang) * len, Math.sin(ang) * len, R * 0.05, [[0, C.redL], [1, C.red]]);
+        }
+        this.disc(B, T, 0, 0, R * 0.1 * s, [[0, C.redD], [1, C.redD]]);
+        break;
+      }
+      case "lily": {
+        const order = [0, 5, 1, 4, 2, 3];
+        for (const i of order) {
+          const s = U(i, 70); if (s <= 0.001) continue;
+          const ang = -Math.PI / 2 + (i - 2.5) * 0.56;
+          this.petal(B, T, 0, R * 0.3, ang, R * 1.2 * s, R * 0.2, lit, ol, lw * 0.8);
+        }
+        const s = Math.min(1, U(6, 70));
+        for (let k = 0; k < 3; k++) {
+          const ang = -Math.PI / 2 + (k - 1) * 0.42, len = R * (0.85 + 0.1 * k) * s;
+          const tx = Math.cos(ang) * len, ty = R * 0.3 + Math.sin(ang) * len;
+          B.stroke([T(0, R * 0.3), T(tx, ty)], C.redL, lw * 0.7);
+          if (R >= 16) this.disc(B, T, tx, ty, R * 0.06, [[0, C.redD], [1, C.redD]]);
+        }
+        break;
+      }
+      case "bell": {
+        const spots = [[-0.5, 0.0], [0.42, 0.28], [-0.02, 0.62]];
+        const shape = [[-0.1, -0.36], [-0.17, -0.1], [-0.36, 0.3], [-0.28, 0.42], [-0.1, 0.34], [0, 0.42], [0.1, 0.34], [0.28, 0.42], [0.36, 0.3], [0.17, -0.1], [0.1, -0.36]];
+        spots.forEach((q, i) => {
+          const s = U(i, 110); if (s <= 0.001) return;
+          const cx = q[0] * R, cy = q[1] * R, k = Math.min(1.2, s) * R;
+          B.stroke([T(0, 0), T(cx, cy - 0.4 * k)], C.blueD, lw);
+          const pts = shape.map(([x, y]) => T(cx + x * k, cy + y * k));
+          const c = T(cx, cy - 0.1 * k);
+          B.fillGrad(pts, c[0], c[1], 0.55 * k, [[0, C.redL], [0.6, C.red], [1, C.redD]]);
+          if (R >= 16) B.stroke([T(cx - 0.3 * k, cy + 0.38 * k), T(cx + 0.3 * k, cy + 0.38 * k)], C.redD, lw * 0.7);
+        });
+        break;
+      }
+      case "lavender": {
+        const n = 9, top = R * 1.9;
+        B.stroke([T(0, R * 0.1), T(0, R * 0.1 - top * Math.min(1, U(0, 0)))], C.blueD, lw);
+        for (let i = 0; i < n; i++) {
+          const u = i / n, s = U(i, 55); if (s <= 0.001) continue;
+          const y = R * 0.1 - u * top * 0.95, w = R * 0.2 * (1 - 0.45 * u);
+          for (const sd of [-1, 1]) {
+            const cx = sd * w * 0.9 * s, pts = this.blobPts(T, cx, y, R * 0.13 * (1 - 0.4 * u) * s, R * 0.18 * s, sd * 0.5, e.ph1 + i, 12);
+            const c = T(cx, y);
+            B.fillGrad(pts, c[0], c[1], R * 0.2, [[0, C.redL], [1, C.red]]);
+          }
+        }
+        const s = U(n, 55), ty = R * 0.1 - top;
+        this.disc(B, T, 0, ty, R * 0.1 * Math.min(1, s), [[0, C.redL], [1, C.red]], e.ph2);
+        break;
+      }
+      case "fern": {
+        const n = 13, H = R * 2.0, sgn = e.ph2 > 3.14 ? 1 : -1;
+        const mid: number[][] = [];
+        for (let i = 0; i <= 10; i++) { const u = i / 10 * Math.min(1, U(0, 0)); mid.push(T(sgn * R * 0.45 * Math.sin(u * 1.6), -H * u)); }
+        if (mid.length > 1) B.stroke(mid, C.blueL, lw);
+        for (let i = 1; i <= n; i++) {
+          const u = i / (n + 1), s = U(i, 40); if (s <= 0.001) continue;
+          const mx = sgn * R * 0.45 * Math.sin(u * 1.6), my = -H * u;
+          const tang = Math.atan2(-H, sgn * R * 0.45 * 1.6 * Math.cos(u * 1.6)), len = R * 0.62 * (1 - 0.8 * u) * s;
+          this.petal(B, T, mx, my, tang - 1.15, len, R * 0.1, [[0, C.blue], [1, C.blueL]]);
+          this.petal(B, T, mx, my, tang + 1.15, len, R * 0.1, [[0, C.blueD], [1, C.blue]]);
+        }
+        break;
+      }
+      case "dandelion": {
+        const n = 26;
+        for (let i = 0; i < n; i++) {
+          const s = Math.min(1.1, U(Math.floor(i / 4), 60)); if (s <= 0.001) continue;
+          const ang = (i / n) * TAU + e.ph1, len = R * (0.75 + 0.22 * Math.sin(i * 2.3)) * s;
+          const x = Math.cos(ang) * len, y = Math.sin(ang) * len;
+          B.stroke([T(0, 0), T(x, y)], C.redL, lw * 0.8);
+          if (R >= 18) this.disc(B, T, x, y, R * 0.07, [[0, C.redL], [1, C.red]]);
+        }
+        this.disc(B, T, 0, 0, R * 0.16, [[0, C.red], [1, C.redD]]);
+        break;
+      }
+    }
+  }
+
   // ---------- render (shared by typing view + poster) ----------
   frame() {
     const now = performance.now(), dt = Math.min(64, now - (this.lt || now)); this.lt = now;
@@ -678,46 +1029,71 @@ export class Garden {
     this.cx += (this.ctx_ - this.cx) * k; this.cy += (this.cty - this.cy) * k;
     for (const l of this.letters) if (!l.dead && l.tx != null) { l.x += (l.tx - l.x) * k; l.y += (l.ty - l.y) * k; }
     this.letters = this.letters.filter((l: any) => !(l.dead && now - l.dead > 300));
-    const tgt = this.targetCh();
-    if (Math.abs(tgt - this.chCur) >= 1.5) { this.chCur = tgt; this.applyCell(); }
+    const tgt = this.targetCh(), tgtT = this.targetChT();
+    if (Math.abs(tgt - this.chCur) >= Math.max(0.5, this.chCur * 0.1) || Math.abs(tgtT - this.chCurT) >= Math.max(0.5, this.chCurT * 0.1)) { this.chCur = tgt; this.chCurT = tgtT; this.applyCell(); }
     this.paint(now, true);
   }
   pal() {
     const p = this.PALrow();
-    if (this._palRow !== p) {
-      const rt = tones(p[2]), bt = tones(p[3]);
-      this._palRow = p;
-      this._palC = { red: p[2], blue: p[3], line: p[4], text: p[5], vein: p[1], redD: rt.dark, redL: rt.light, blueD: bt.dark, blueL: bt.light };
+    if (this._palKey !== this._ver) {
+      const r = this.roles();
+      const rt = tones(r.red), bt = tones(p[3]);
+      const kind: Record<string, { base: string; dark: string; light: string }> = {};
+      for (const [k, hex] of Object.entries(r.kinds)) { const t = tones(hex); kind[k] = { base: hex, dark: t.dark, light: t.light }; }
+      this._palKey = this._ver;
+      this._palC = { red: r.red, blue: p[3], line: p[4], text: p[5], vein: p[1], redD: rt.dark, redL: rt.light, blueD: bt.dark, blueL: bt.light, kind };
     }
     return { bg: p[1], C: this._palC };
   }
   mainState() { return { letters: this.letters, S: this.Sd, C: this.pal().C, boil: this.props.boil ?? true, recoil: this.props.recoil ?? 20, speed: 1, wither: 260, face: true }; }
-  paint(now: number, caret: boolean) {
-    const s = this.surface;
+  /** One layer of the layered surface: sets up its mask, runs `fn` with a backend, then turns the result into characters. */
+  pass(s: AsciiSurface, now: number, fn: (B: any, g: CanvasRenderingContext2D) => void, vector = false, bg = false) {
+    if (vector) {
+      // size 0: this layer is not ASCII at all. It is drawn as real vector art straight onto the canvas.
+      const ctx = this.canvas.getContext("2d")!;
+      ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
+      if (bg) { ctx.fillStyle = this.pal().bg; ctx.fillRect(0, 0, this.W, this.H); }
+      this.minLw = 0;
+      fn(this.backend(ctx), ctx);
+      return;
+    }
     this.minLw = s.minLw;
     const g = s.beginMask();
-    const B = this.backend(g), st: any = this.mainState();
-    this.render(B, now, st);
-    this.drawFlies(B, now, st.C);
-    if (caret && this.gifts && this.gifts.length) {
-      const LIFE = 60000; this.gifts = this.gifts.filter((gf: any) => now - gf.t0 < LIFE);
-      for (const gf of this.gifts) {
-        const age = now - gf.t0, w = 1 - this.eo((age - (LIFE - 2200)) / 2200);
-        g.globalAlpha = Math.max(0, w);
-        this.rose(B, gf.x * this.W, gf.y * this.H + (1 - w) * this.Sd * 0.3, this.Sd * 0.24 * (0.65 + 0.35 * w), gf.rot + (1 - w) * 0.6, gf.e, age, null);
-      }
-      g.globalAlpha = 1;
-    }
-    if (caret) {
-      const S = this.Sd, on = now - this.lastKey < 500 || Math.floor(now / 530) % 2 === 0, hf = this.eo((now - this.t0) / 600);
-      if (on && hf > 0) { const h = 0.8 * S * hf, w = Math.max(2, S * 0.03); B.rect(this.cx - w / 2, this.cy - h / 2, w, h, st.C.text); }
-    }
+    fn(this.backend(g), g);
     s.present(now / 1000);
   }
-  render(B: any, now: number, st: any) {
+  paint(now: number, caret: boolean) {
+    const ls = this.surface, st: any = this.mainState();
+    // flowers behind the type, the type, then flowers in front: the flowers and the type have their own character sizes
+    const vf = this.cellScale <= 0, vt = this.textScale <= 0; // size 0 = real vector instead of ASCII
+    this.pass(ls.back, now, (B) => this.render(B, now, st, "back"), vf, true);
+    this.pass(ls.text, now, (B) => {
+      this.render(B, now, st, "text");
+      if (caret) {
+        const S = this.Sd, on = now - this.lastKey < 500 || Math.floor(now / 530) % 2 === 0, hf = this.eo((now - this.t0) / 600);
+        if (on && hf > 0) { const h = 0.8 * S * hf, w = Math.max(2, S * 0.03); B.rect(this.cx - w / 2, this.cy - h / 2, w, h, st.C.text); }
+      }
+    }, vt);
+    this.pass(ls.front, now, (B, g) => {
+      this.render(B, now, st, "front");
+      this.drawFlies(B, now, st.C);
+      if (caret && this.gifts && this.gifts.length) {
+        const LIFE = 60000; this.gifts = this.gifts.filter((gf: any) => now - gf.t0 < LIFE);
+        for (const gf of this.gifts) {
+          const age = now - gf.t0, w = 1 - this.eo((age - (LIFE - 2200)) / 2200);
+          g.globalAlpha = Math.max(0, w);
+          this.rose(B, gf.x * this.W, gf.y * this.H + (1 - w) * this.Sd * 0.3, this.Sd * 0.24 * (0.65 + 0.35 * w), gf.rot + (1 - w) * 0.6, gf.e, age, null);
+        }
+        g.globalAlpha = 1;
+      }
+    }, vf);
+  }
+  render(B: any, now: number, st: any, phase: "all" | "back" | "text" | "front" = "all") {
     const S = st.S, L = st.letters, act = L.filter((l: any) => !l.dead), sp = st.speed || 1;
-    this.cc = st.C; this._now = now; if (st.face) this.perch = [];
-    if (st.face) for (const l of L) {
+    this.cc = st.C; this._now = now;
+    const first = phase === "all" || phase === "back"; // per-frame state is advanced once, not once per layer
+    if (st.face && first) this.perch = [];
+    if (st.face && first) for (const l of L) {
       let tx = 0, ty = 0;
       const A = !l.dead && l.ch !== " " ? this.near(l.x, l.y - S * 0.6) : null;
       if (A) {
@@ -727,7 +1103,7 @@ export class Garden {
       const c = l.lean || (l.lean = [0, 0]);
       c[0] += (tx - c[0]) * 0.07; c[1] += (ty - c[1]) * 0.07;
     }
-    const f = st.boil ? Math.floor(now / 120) : 0, amp = st.boil ? Math.max(0.8, S * 0.01) : 0;
+    const f = st.boil ? Math.floor(now / 120) : 0, amp = st.boil ? Math.max(0.8, S * 0.01) * (0.55 + (this.chaos ?? 0.3) * 2.4) : 0;
     const kd = (l: any) => l.dead ? 1 - this.eo((now - l.dead) / st.wither) : 1;
     const draw = (layer: number) => {
       for (const l of L) {
@@ -744,9 +1120,9 @@ export class Garden {
         }
       }
     };
-    draw(0);
-    for (const l of L) if (l.ch !== " " && (st.textAll || !l.dead)) B.text(l.ch, l.x, l.y, S, st.C.text);
-    draw(1);
+    if (phase === "all" || phase === "back") draw(0);
+    if (phase === "all" || phase === "text") for (const l of L) if (l.ch !== " " && (st.textAll || !l.dead)) B.text(l.ch, l.x, l.y, S, st.C.text);
+    if (phase === "all" || phase === "front") draw(1);
   }
   wpt(st: any, l: any, x: number, y: number) {
     if (l.birth != null && this._now != null) {
@@ -858,13 +1234,24 @@ export class Garden {
     this.butterfly(B, p[0], p[1], sz, ang, o, C);
   }
   /** One poster frame through a surface (the preview canvas or an export canvas). */
-  drawPoster(surface: AsciiSurface, t: number) {
-    this.minLw = surface.minLw;
-    const g = surface.beginMask();
-    this.posterDraw(g, t);
-    surface.present(t / 1000);
+  drawPoster(ls: LayeredSurface, t: number) {
+    const vf = this.cellScale <= 0, vt = this.textScale <= 0; // size 0 = real vector instead of ASCII
+    for (const [ph, s, vec, bg] of [["back", ls.back, vf, true], ["text", ls.text, vt, false], ["front", ls.front, vf, false]] as const) {
+      if (vec) {
+        const ctx = ls.canvas.getContext("2d")!;
+        ctx.setTransform(1, 0, 0, 1, 0, 0);
+        if (bg) { ctx.fillStyle = this.pal().bg; ctx.fillRect(0, 0, 1080, 1080); }
+        this.minLw = 0;
+        this.posterDraw(ctx, t, ph);
+        continue;
+      }
+      this.minLw = s.minLw;
+      const g = s.beginMask();
+      this.posterDraw(g, t, ph);
+      s.present(t / 1000);
+    }
   }
-  posterDraw(g: CanvasRenderingContext2D, t: number) {
+  posterDraw(g: CanvasRenderingContext2D, t: number, phase: "all" | "back" | "text" | "front" = "all") {
     const P = this.P; if (!P) return;
     const pc = this.pal();
     const tt = ((t % P.T) + P.T) % P.T, L = P.letters, B = this.backend(g);
@@ -901,7 +1288,7 @@ export class Garden {
       st.rotw = (e: any) => { const a = Math.atan2(ly - e.y, lx - e.x); return Math.sin(a) * 0.15; };
     } else if (P.preset === "visit") {
       set(-1e5);
-      st.perchOn = true; this.perch = [];
+      st.perchOn = true; if (phase === "all" || phase === "back") this.perch = [];
       const ph = tt / P.T * Math.PI * 2;
       st.warp = (x: number, y: number, l: any) => { const hh = Math.max(0, (l.y - y) / P.S); return [x + Math.sin(ph + l.x * 0.004 + hh) * P.S * 0.015 * hh, y]; };
     } else {
@@ -910,14 +1297,15 @@ export class Garden {
       st.letters = L.filter((l: any) => tt >= l.birth);
       st.textAll = false;
     }
-    this.render(B, tt, st);
-    if (P.preset === "reach") {
+    this.render(B, tt, st, phase);
+    const front = phase === "all" || phase === "front", txt = phase === "all" || phase === "text";
+    if (front && P.preset === "reach") {
       const [lx, ly] = this._light, r = P.S * 0.09, pts: number[][] = [];
       for (let k = 0; k < 20; k++) { const a = k / 20 * Math.PI * 2; pts.push([lx + Math.cos(a) * r, ly + Math.sin(a) * r]); }
       B.fill(pts, st.C.line);
     }
-    if (P.preset === "visit") this.posterFly(B, tt, P, st.C);
-    if (P.preset === "typed") {
+    if (front && P.preset === "visit") this.posterFly(B, tt, P, st.C);
+    if (txt && P.preset === "typed") {
       const born = st.letters, last = born[born.length - 1], S = P.S;
       if (Math.floor(tt / 400) % 2 === 0 || (last && tt - last.birth < 300)) {
         const x = last ? last.tx + last.tw / 2 + 0.07 * S : 540, y = last ? last.ty - 0.33 * S : 540, w = Math.max(2, S * 0.03), h = 0.8 * S;
@@ -943,9 +1331,10 @@ export class Garden {
   fname() { return "garden-" + (this.state.text || "loop").trim().replace(/[^a-z0-9]+/gi, "-").toLowerCase().slice(0, 24) + "-" + this.state.preset; }
   exportSurface() {
     const c = document.createElement("canvas");
-    const s = new AsciiSurface(c);
+    const s = new LayeredSurface(c);
+    s.setGrid(false); // same as the preview
     s.setRoles(this.roles());
-    s.resize(1080, 1080, 1, POSTER_CELL.cw, POSTER_CELL.ch);
+    s.resize(1080, 1080, 1, ...this.posterCells());
     return s;
   }
   setBusy(b: boolean, status: string) { this.state.busy = b; this.cb.onBusy(b); this.cb.onStatus(status); }
