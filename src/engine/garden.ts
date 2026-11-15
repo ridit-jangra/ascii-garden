@@ -583,11 +583,13 @@ export class Garden {
       wi += parts.length - 1;
     }
     const lineW = (li: number[], S: number) => { let e = li.length; while (e > 0 && A[li[e-1]].ch === " ") e--; let w = 0; for (let k = 0; k < e; k++) w += ws[li[k]]; return w * S; };
+    // Wrapped text uses a narrower column than a single line, so a long phrase breaks into more, larger lines instead of two wide, small ones.
+    const colW = W * 0.58;
     const wrap = (S: number) => {
       const lines: number[][] = [[]]; let lw = 0;
       for (const w of words) {
         const ww = w.idx.reduce((s: number, i: number) => s + ws[i], 0) * S;
-        if (!w.sp && lw > 0 && lw + ww > maxW) { lines.push([]); lw = 0; }
+        if (!w.sp && lw > 0 && lw + ww > colW) { lines.push([]); lw = 0; }
         lines[lines.length - 1].push(...w.idx); lw += ww;
       }
       return lines;
@@ -601,7 +603,7 @@ export class Garden {
       let lo = H * 0.03, hi = H * 0.15;
       for (let k = 0; k < 22; k++) {
         const mid = (lo + hi) / 2, ls = wrap(mid);
-        const ok = ls.every(li => lineW(li, mid) <= maxW) && ls.length * LH * mid <= H * 0.82;
+        const ok = ls.every(li => lineW(li, mid) <= colW) && ls.length * LH * mid <= H * 0.82;
         if (ok) lo = mid; else hi = mid;
       }
       S = lo; lines = wrap(S);
