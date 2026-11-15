@@ -568,7 +568,8 @@ export class Garden {
     if (cur) words.push(cur);
     // A single long word cannot wrap, so it would just keep shrinking until the letters are unreadable (and drowned by flowers).
     // Break any word too long for a line at a readable size into chunks, which can sit on separate lines.
-    const limit = maxW / (H * 0.1);
+    const colW = W * 0.58;
+    const limit = colW / (H * 0.1);
     for (let wi = 0; wi < words.length; wi++) {
       const w = words[wi];
       if (w.sp || w.idx.reduce((t: number, i: number) => t + ws[i], 0) <= limit) continue;
@@ -584,10 +585,11 @@ export class Garden {
     }
     const lineW = (li: number[], S: number) => { let e = li.length; while (e > 0 && A[li[e-1]].ch === " ") e--; let w = 0; for (let k = 0; k < e; k++) w += ws[li[k]]; return w * S; };
     // Wrapped text uses a narrower column than a single line, so a long phrase breaks into more, larger lines instead of two wide, small ones.
-    const colW = W * 0.58;
     const wrap = (S: number) => {
       const lines: number[][] = [[]]; let lw = 0;
       for (const w of words) {
+        // Spaces belong to the preceding line; never indent a fresh line.
+        if (w.sp && lw === 0) continue;
         const ww = w.idx.reduce((s: number, i: number) => s + ws[i], 0) * S;
         if (!w.sp && lw > 0 && lw + ww > colW) { lines.push([]); lw = 0; }
         lines[lines.length - 1].push(...w.idx); lw += ww;
