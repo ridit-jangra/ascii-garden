@@ -7,9 +7,9 @@ export interface GardenKnobs {
   chaos: number;
   boil: boolean;
   recoil: number;
-  /** The flowers' character size: 0 is no ASCII at all (real vector flowers), then finer to chunkier up to 1.8. */
+  /** The flowers' character size: below 0.4 they switch to real vector art, then finer to chunkier up to 1.8. */
   detail: number;
-  /** The type's character size, on its own: 0 is real vector type. */
+  /** The type's character size, on its own: below 0.4 it switches to the real font. */
   textDetail: number;
   grid: boolean;
 }

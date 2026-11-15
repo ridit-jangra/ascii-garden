@@ -99,6 +99,9 @@ const KIND_SCALE: Record<string, number> = { rose: 1, tulip: 1.25, daisy: 1.25, 
 
 const POSTER_CELL = { cw: 7, ch: 10 };
 
+/** Below this cell size the characters get too small to read, so that layer is drawn as real vector art instead of ASCII. */
+export const VECTOR_BELOW = 0.4;
+
 export class Garden {
   [key: string]: any;
 
@@ -1065,7 +1068,7 @@ export class Garden {
   paint(now: number, caret: boolean) {
     const ls = this.surface, st: any = this.mainState();
     // flowers behind the type, the type, then flowers in front: the flowers and the type have their own character sizes
-    const vf = this.cellScale <= 0, vt = this.textScale <= 0; // size 0 = real vector instead of ASCII
+    const vf = this.cellScale < VECTOR_BELOW, vt = this.textScale < VECTOR_BELOW; // too small for ASCII = real vector
     this.pass(ls.back, now, (B) => this.render(B, now, st, "back"), vf, true);
     this.pass(ls.text, now, (B) => {
       this.render(B, now, st, "text");
@@ -1235,7 +1238,7 @@ export class Garden {
   }
   /** One poster frame through a surface (the preview canvas or an export canvas). */
   drawPoster(ls: LayeredSurface, t: number) {
-    const vf = this.cellScale <= 0, vt = this.textScale <= 0; // size 0 = real vector instead of ASCII
+    const vf = this.cellScale < VECTOR_BELOW, vt = this.textScale < VECTOR_BELOW; // too small for ASCII = real vector
     for (const [ph, s, vec, bg] of [["back", ls.back, vf, true], ["text", ls.text, vt, false], ["front", ls.front, vf, false]] as const) {
       if (vec) {
         const ctx = ls.canvas.getContext("2d")!;

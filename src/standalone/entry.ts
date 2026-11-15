@@ -16,9 +16,9 @@ export interface MountConfig {
   colors?: Record<string, string>;
   /** 0 is minimal botanical typography, 1 is the garden taking over. 0.3 matches the original. */
   chaos?: number;
-  /** Character size of the flowers: 0 is smooth vector flowers, lower is finer, higher is chunkier. Default 1. */
+  /** Character size of the flowers: below 0.4 they are smooth vector flowers, lower is finer, higher is chunkier. Default 1. */
   detail?: number;
-  /** Character size of the type, separately: 0 is the real font. Default 1. */
+  /** Character size of the type, separately: below 0.4 it is the real font. Default 1. */
   textDetail?: number;
   /** Let visitors click the garden and type to grow their own. */
   interactive?: boolean;
