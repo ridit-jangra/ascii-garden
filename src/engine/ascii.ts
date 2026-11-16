@@ -345,6 +345,8 @@ export class AsciiSurface {
         const key = (hash3(c, r, 17) * 4294967295) >>> 0;
         const roll = hash3(key, Math.floor(t * 2.4 + (key % 997) / 97), 7);
         const base = rr[dom];
+        // Pure-black typography stays solid instead of picking up the bright background.
+        const blackText = domFam === 4 && base[0] === 0 && base[1] === 0 && base[2] === 0;
         this.axis(domFam);
         const domTh = this.th;
         const domRatio = this.ratio;
@@ -360,7 +362,7 @@ export class AsciiSurface {
           let ch0: string;
           if (domFam === 4) {
             // tiny cells draw as flat blocks (no glyph), so type must use its full colour there, not the dim block behind a glyph
-            fillC = mix(base, bg, ch < 5 ? 0.03 : 0.82);
+            fillC = blackText ? base : mix(base, bg, ch < 5 ? 0.03 : 0.82);
             glyphC = base;
           } else {
             // highlights stay bright, shadows sink a little into the background
@@ -375,7 +377,7 @@ export class AsciiSurface {
             glyphC = rr[sec];
             ch0 = this.ratio > 1.6 ? lineGlyph(this.th) : "o";
           }
-          if (roll < 0.045) glyphC = mix(glyphC, SPARKLE, 0.75);
+          if (roll < 0.045 && !blackText) glyphC = mix(glyphC, SPARKLE, 0.75);
           flag[idx] = CELL_SOLID;
           fill[idx] = pack(fillC[0], fillC[1], fillC[2]);
           color[idx] = pack(glyphC[0], glyphC[1], glyphC[2]);
@@ -385,7 +387,7 @@ export class AsciiSurface {
 
         if (cov < 0.1) continue;
         const f = clamp(0.62 - cov, 0, 0.5) * 0.9;
-        const col = mix(base, bg, f);
+        const col = blackText ? base : mix(base, bg, f);
         let g0: string;
         if (domRatio > lineish) g0 = lineGlyph(domTh);
         else g0 = RAMP[clamp(Math.floor(((cov - 0.1) / 0.5) * RAMP.length), 0, RAMP.length - 1)];

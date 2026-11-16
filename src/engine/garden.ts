@@ -179,7 +179,7 @@ export class Garden {
     this.setFlowers(this.state.flowers);
     this.applyRoles();
 
-    this.onResize = () => this.resize();
+    this.onResize = () => { this.resize(); if (this.state.mode === "poster") this.buildPoster(); };
     window.addEventListener("resize", this.onResize);
     if (typeof ResizeObserver !== "undefined") { this.ro = new ResizeObserver(() => this.resize()); this.ro.observe(this.canvas); }
     this.onKey = (e: KeyboardEvent) => this.key(e);
@@ -1377,27 +1377,21 @@ export class Garden {
       if (pr.id !== "scatter" && l.ch !== " " && nx && nx.ch === " ") { l.cutRel = Math.max(30, nx.b - l.b); this.genEnd(l, l.cutRel); }
     });
     this.rand = Math.random;
-    const res = this.layoutCore(L, 1080, 1080, false);
-    // fit the whole garden (not just the type) inside a 6% margin
-    const S = res.S; let x0 = 1e9, y0 = 1e9, x1 = -1e9, y1 = -1e9;
-    const addP = (l: any, x: number, y: number, r?: number) => { const X = l.tx + x * S, Y = l.ty + y * S, R = (r || 0) * S; x0 = Math.min(x0, X - R); x1 = Math.max(x1, X + R); y0 = Math.min(y0, Y - R); y1 = Math.max(y1, Y + R); };
-    for (const l of L) {
-      if (l.ch === " ") continue;
-      addP(l, -l.tw / S / 2, -0.75); addP(l, l.tw / S / 2, 0.1);
-      const all = [...l.els, ...(l.endEls || [])];
-      for (const e of all) {
-        if (e.t === "stem") e.pts.forEach((q: number[]) => addP(l, q[0], q[1], 0.02));
-        else if (e.t === "leaf") addP(l, e.x, e.y, e.L);
-        else addP(l, e.x, e.y, e.R * 1.15);
-      }
-    }
-    // centre on the type itself; shrink just enough for the garden to clear the margins on every side
-    let tx0 = 1e9, tx1 = -1e9, ty0 = 1e9, ty1 = -1e9;
-    for (const l of L) if (l.ch !== " ") { tx0 = Math.min(tx0, l.tx - l.tw / 2); tx1 = Math.max(tx1, l.tx + l.tw / 2); ty0 = Math.min(ty0, l.ty - 0.72 * S); ty1 = Math.max(ty1, l.ty); }
-    const Z = 1080, half = Z * 0.44, bcx = (tx0 + tx1) / 2, bcy = (ty0 + ty1) / 2;
-    const k = Math.min(1.25, half / Math.max(1, bcx - x0, x1 - bcx), half / Math.max(1, bcy - y0, y1 - bcy));
-    L.forEach(l => { l.tx = Z / 2 + (l.tx - bcx) * k; l.ty = Z / 2 + (l.ty - bcy) * k; l.tw *= k; l.x = l.tx; l.y = l.ty; });
-    this.P = { letters: L, S: S * k, T: pr.T, preset: pr.id };
+    // Lay out at the Type viewport's size, then map those pixels into the
+    // square poster. Do not enlarge or shrink the type to fit its flowers.
+    const stage = this.pcanvas?.parentElement;
+    const width = stage?.clientWidth || this.W || 1080;
+    const height = stage?.clientHeight || this.H || 1080;
+    const displayedSize = Math.min(width, height);
+    const res = this.layoutCore(L, width, height, this.wrapped);
+    const scale = 1080 / displayedSize;
+    L.forEach(l => {
+      l.tx = 540 + (l.tx - width / 2) * scale;
+      l.ty = 540 + (l.ty - height / 2) * scale;
+      l.tw *= scale;
+      l.x = l.tx; l.y = l.ty;
+    });
+    this.P = { letters: L, S: res.S * scale, T: pr.T, preset: pr.id };
     this.applyPosterCells();
     this.pt0 = performance.now();
   }

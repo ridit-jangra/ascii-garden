@@ -2,8 +2,8 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, typ
 import gsap from "gsap";
 import { Garden, PAL, PRESETS, FLOWERS, THEMES, THEMES_ENABLED, defaultKindColor, renderKindPreview, type Mode } from "./engine/garden";
 import CodeExport from "./export/CodeExport";
+import { exportLive } from "./export/live";
 import { exportGif } from "./export/gif";
-import { startRecording, type Recording, type Clip } from "./export/record";
 import LiquidGlassFilter from "./components/LiquidGlassFilter";
 import GlassChoices from "./components/GlassChoices";
 import TweaksPanel, { type Group } from "./components/TweaksPanel";
@@ -23,14 +23,8 @@ const luminance = (hex: string) => {
 };
 
 /** GSAP hover tweens shared by buttons and chips. */
-const hoverTween = {
-  onPointerEnter: (e: React.PointerEvent<HTMLElement>) => { gsap.to(e.currentTarget, { scale: 1.06, duration: 0.18, ease: "power2.out", overwrite: "auto" }); },
-  onPointerLeave: (e: React.PointerEvent<HTMLElement>) => { gsap.to(e.currentTarget, { scale: 1, duration: 0.5, ease: "elastic.out(1, 0.45)", overwrite: "auto" }); },
-};
-const hoverSoft = {
-  onPointerEnter: (e: React.PointerEvent<HTMLElement>) => { gsap.to(e.currentTarget, { y: -2, duration: 0.2, ease: "power2.out", overwrite: "auto" }); },
-  onPointerLeave: (e: React.PointerEvent<HTMLElement>) => { gsap.to(e.currentTarget, { y: 0, duration: 0.45, ease: "elastic.out(1, 0.5)", overwrite: "auto" }); },
-};
+const hoverTween = {};
+const hoverSoft = {};
 
 /**
  * Smooth hovers for every button-like control: GSAP fades the background and text colour instead of snapping.
@@ -97,11 +91,7 @@ export default function App() {
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState("");
   const [videoLabel, setVideoLabel] = useState("Export loop");
-  // recording the live Type tab as MP4 or GIF
-  const [rec, setRec] = useState<{ sec: number } | null>(null);
-  const [clip, setClip] = useState<Clip | null>(null); // a finished recording waiting for MP4 or GIF
   const [recMsg, setRecMsg] = useState("");
-  const recRef = useRef<Recording | null>(null);
   const lastStatus = useRef("");
   const [menuOpen, setMenuOpen] = useState(false);
   const chevRef = useRef<SVGSVGElement>(null);
@@ -212,64 +202,20 @@ export default function App() {
   };
 
   const goMode = (m: Mode) => {
-    if (m === mode) return;
+    if (m === mode || busy) return;
     if (m === "poster") setPText(garden.current?.liveText() || pText);
     setMode(m);
   };
 
-  const stopRec = useCallback(async () => {
-    const r = recRef.current;
-    if (!r) return;
-    recRef.current = null;
-    setRec(null);
-    setMenuOpen(false);
-    setRecMsg("Processing…");
-    try {
-      const out = await r.stop();
-      if (typeof out === "string") setRecMsg(out);
-      else { setRecMsg(""); setClip(out); } // now they choose MP4 or GIF
-    } catch (err) { console.error(err); setRecMsg("Recording failed."); }
-  }, []);
-  const toggleRec = () => {
-    const g = garden.current; if (!g) return;
-    if (recRef.current) { void stopRec(); return; }
-    setClip(null); setMenuOpen(false); setRecMsg("");
-    recRef.current = startRecording(g, (sec) => setRec({ sec }), () => void stopRec());
-    setRec({ sec: 0 });
-    g.refocus(); // keep typing: keys go to the garden, not the button
-  };
-  const saveClip = async (kind: "video" | "gif") => {
-    const c = clip; if (!c) return;
-    setClip(null);
-    if (kind === "video") setRecMsg(c.saveVideo());
-    else { setRecMsg("Encoding GIF 0%"); setRecMsg(await c.saveGif((p) => setRecMsg(`Encoding GIF ${p}%`))); }
-    window.setTimeout(() => setRecMsg(""), 6000);
-    garden.current?.refocus();
-  };
-  // leaving the Type tab ends a recording and drops an unsaved clip (it only captures the Type view)
-  useEffect(() => { if (mode !== "type") { if (recRef.current) void stopRec(); setClip(null); } }, [mode, stopRec]);
-  useEffect(() => {
-    if (!clip) return;
-    const key = (e: KeyboardEvent) => { if (e.key === "Escape") setClip(null); };
-    window.addEventListener("keydown", key);
-    return () => window.removeEventListener("keydown", key);
-  }, [clip]);
-
-  /**
-   * The normal export, from the Type tab: the words on the garden become the same clean 1080 x 1080 loop the Poster tab
-   * makes (with the chosen motion preset), as an MP4, a GIF or PNG frames.
-   */
   const exportLoop = async (kind: "mp4" | "gif" | "frames") => {
     const g = garden.current;
     if (!g || g.state.busy) return;
     setMenuOpen(false);
     setRecMsg("");
-    if (mode === "type") g.setPoster({ text: g.liveText() || pText, preset, seed }); // the Poster tab already has its own words
-    if (kind === "mp4") await g.exportVideo();
+    if (mode === "type") await exportLive(g, kind);
+    else if (kind === "mp4") await g.exportVideo();
     else if (kind === "gif") await exportGif(g);
     else await g.exportFrames();
-    setRecMsg(lastStatus.current);
-    window.setTimeout(() => setRecMsg(""), 6000);
   };
   // GSAP: the chevron points up (the menu opens above the dock) and turns to point down while it is open
   useEffect(() => {
@@ -325,9 +271,6 @@ export default function App() {
       ),
     }]]);
   }
-  if (mode === "type") {
-    groups.push(["Export loop", [{ kind: "node", key: "presets", node: <PresetPicker preset={preset} onPreset={(id) => setPreset(id)} /> }]]);
-  }
   groups.push(["Garden", [
     ...(THEMES_ENABLED ? [{ kind: "node" as const, key: "theme", node: <ThemeSwitch value={theme} onChange={changeTheme} /> }] : []),
     { kind: "range", key: "chaos", label: "Chaos", min: 0, max: 1, step: 0.01, def: KNOB_DEFAULTS.chaos, value: knobs.chaos, set: (v) => setKnob("chaos", v), hint: "From minimal botanical typography to the garden taking over: stems, branches, flower size and leaves all grow with it." },
@@ -374,7 +317,7 @@ export default function App() {
   );
   const videoName = videoLabel.includes("unavailable") ? "Video (unavailable)" : videoLabel.replace(/^Export | loop$/g, "");
   const exportBtn = (
-    <button type="button" className="pill export-btn" disabled={busy || !!rec} aria-haspopup="menu" aria-expanded={menuOpen} {...hoverTween} onClick={() => setMenuOpen((o) => !o)}>
+    <button type="button" className="pill export-btn" disabled={busy} aria-haspopup="menu" aria-expanded={menuOpen} {...hoverTween} onClick={() => setMenuOpen((o) => !o)}>
       Export
       <svg ref={chevRef} className="chev" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M6 15l6-6 6 6" /></svg>
     </button>
@@ -389,21 +332,12 @@ export default function App() {
           {menuItem("SVG", "made of text, scales forever", () => { setMenuOpen(false); garden.current?.saveSVG(); garden.current?.refocus(); })}
         </>
       )}
-      <div className="menu-title">{mode === "type" ? "Loop · preset in Tweaks" : "Loop"}</div>
-      {menuItem(videoName, "1080 × 1080 video of the words growing", () => exportLoop("mp4"))}
-      {menuItem("GIF", "720 × 720, small enough for a README", () => exportLoop("gif"))}
-      {menuItem("PNG frames", "every frame, as a .zip", () => exportLoop("frames"))}
+      <div className="menu-title">{mode === "type" ? "Type garden · 6-second capture" : "Loop"}</div>
+      {menuItem(videoName, mode === "type" ? "Your Type garden · 6-second video" : "1080 × 1080 video of the words growing", () => exportLoop("mp4"))}
+      {menuItem("GIF", mode === "type" ? "Your Type garden · 6-second GIF" : "720 × 720 animated poster", () => exportLoop("gif"))}
+      {menuItem("PNG frames", mode === "type" ? "Your Type garden · 6 seconds at 10 fps" : "Every poster frame, as a .zip", () => exportLoop("frames"))}
       <div className="menu-title">Code</div>
       {menuItem("React / HTML", "copy-paste, no dependencies", () => { setMenuOpen(false); openExport(); })}
-    </div>
-  );
-  // after you stop recording: save it as video or as a GIF
-  const clipMenu = clip && (
-    <div className="export-menu glass" role="dialog" aria-label="Save recording" style={{ ["--blur" as any]: "14px" }}>
-      <div className="menu-title">Save this {Math.max(1, Math.round(clip.seconds))}s recording as</div>
-      {clip.videoExt && menuItem(clip.videoExt.toUpperCase() + " video", "full quality, plays anywhere", () => saveClip("video"))}
-      {menuItem("GIF", `${clip.gifFrames} frames, loops, great for a README`, () => saveClip("gif"))}
-      <button type="button" className="menu-discard" onClick={() => setClip(null)}>Discard</button>
     </div>
   );
 
@@ -454,11 +388,7 @@ export default function App() {
         >
           {mode === "type" ? (
             <>
-              {rec ? (
-                <span className="rec-status"><i className="rec-dot" />Recording {Math.floor(rec.sec / 60)}:{String(Math.floor(rec.sec % 60)).padStart(2, "0")} · type away, then press Stop</span>
-              ) : clip ? (
-                <span className="status">Recording ready · choose a format</span>
-              ) : busy ? (
+              {busy ? (
                 <span className="status">{status}</span>
               ) : recMsg ? (
                 <span className="status">{recMsg}</span>
@@ -472,13 +402,7 @@ export default function App() {
                 </div>
               )}
               <div className="actions">
-                <button
-                  type="button" className={"pill rec-btn" + (rec ? " on" : "")} disabled={busy}
-                  title="Record the garden: press, type, then press Stop and choose MP4 or GIF"
-                  {...hoverTween} onClick={toggleRec}
-                >{rec ? "■ Stop" : <><i className="rec-dot-sm" />Record</>}</button>
                 {exportBtn}
-                {clipMenu}
                 {exportMenu}
               </div>
             </>
