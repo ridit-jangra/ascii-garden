@@ -77,11 +77,6 @@ const RAMP = ".',:;+=";
  * [shadow, base, highlight], so each flower has a texture of its own as well as a colour.
  */
 export const KIND_GLYPHS: Record<string, [string, string, string]> = {
-  sceneCloud: [";:=+", ".:;~", "'`.,"],
-  sceneMountain: ["%#=", ":;+=", ".:'"],
-  sceneRidge: ["%#=", ":;+=", ".:'"],
-  sceneEarth: ["#%x", "/;+=", "\\|/"],
-  sceneSand: ["#%", ":;=", ".:'"],
   tulip: ["HM#%W", "Yy+*=", ".'`:,"],
   daisy: ["@08O", "o*:+.", "'`.,;"],
   poppy: ["&@%#8", "O0o*^", "`'.,:"],

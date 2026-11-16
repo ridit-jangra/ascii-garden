@@ -1,4 +1,3 @@
-import { SCENE_DEFAULTS, SCENE_COLORS, groundY, drawScene, type SceneOptions } from "./scene";
 /**
  * Type Garden, in ASCII.
  * A TypeScript port of Akshat Agarwal's Type Garden (type-garden.vercel.app): type and stems and roses grow
@@ -31,7 +30,7 @@ export interface StartOptions {
   embed?: boolean;
 }
 
-export type Mode = "type" | "poster" | "flowers";
+export type Mode = "type" | "poster";
 
 export interface Callbacks {
   onStatus: (s: string) => void;
@@ -262,7 +261,6 @@ export class Garden {
     const p = this.PALrow();
     const kinds: Record<string, string> = {};
     for (const k of Object.keys(KIND_COLOR)) kinds[k] = this.kindColor(k);
-    if (this.state.mode === "flowers") Object.assign(kinds, SCENE_COLORS);
     return { bg: p[1], red: this.kindColor("rose"), blue: p[3], line: p[4], text: p[5], kinds };
   }
   PALrow() { return this.customRow || PAL[this.state.palette] || PAL[0]; }
@@ -317,33 +315,9 @@ export class Garden {
     }
     this.lastKey = now;
   }
-  scene: SceneOptions = { ...SCENE_DEFAULTS };
-  sceneSeed = 1;
-  setScene(options: SceneOptions) { this.scene = { ...options }; }
-  flowerBed: any[] = [];
-  regenerateFlowers() {
-    const now = performance.now();
-    this.sceneSeed = Math.floor(Math.random() * 1e6);
-    const count = Math.max(5, Math.min(14, Math.round(this.W / 85)));
-    this.flowerBed = Array.from({ length: count }, (_, i) => {
-      const l: any = { id: 10000 + i, ch: "o", ws: Math.floor(Math.random() * 1e9), wi: 0,
-        birth: now + i * 65, tb: now, grounded: true, x: 0, y: 0 };
-      this.gen(l);
-      return l;
-    });
-  }
-  flowerState() {
-    const S = Math.min(this.H * 0.23, this.W * 0.18, 170);
-    this.flowerBed.forEach((l, i) => {
-      l.x = this.W * (0.12 + 0.76 * i / Math.max(1, this.flowerBed.length - 1));
-      l.y = groundY(l.x, this.W, this.H, this.scene, this.sceneSeed) + 7;
-    });
-    return { ...this.mainState(), letters: this.flowerBed, S, noText: true };
-  }
   setMode(m: Mode) {
     this.state.mode = m;
     this.applyRoles();
-    if (m === "flowers") { this.input?.blur(); this.resize(); this.regenerateFlowers(); }
     if (m === "type") requestAnimationFrame(() => { this.resize(); this.input && this.input.focus({ preventScroll: true }); });
   }
   setPoster(p: { text: string; preset: string; seed: number }) {
@@ -766,7 +740,6 @@ export class Garden {
   }
   /** Grow every letter on screen again with the current chaos and species, so the change can be watched. */
   regrow() {
-    if (this.state.mode === "flowers") { this.regenerateFlowers(); return; }
     const now = performance.now();
     const A = this.letters.filter((l: any) => !l.dead);
     A.forEach((l: any, i: number) => {
@@ -836,9 +809,9 @@ export class Garden {
     let nUp = 1;
     for (let k = 0; k < 4; k++) if (r() < 0.45 * p.dens * (k ? 0.7 : 1)) nUp++;
     for (let i = 0; i < nUp; i++) {
-      this.grow(r, E, nid, p, { base: l.grounded ? [0, 0] : [inX(), -r() * 0.3], dir: -Math.PI / 2 + p.lean * 0.5 + (r() - 0.5) * 0.7, len: (0.6 + r() * 0.5) * p.len, d0: 40 + i * 110, tip: l.wi === 0 && i === 0 ? "rose" : null });
+      this.grow(r, E, nid, p, { base: [inX(), -r() * 0.3], dir: -Math.PI / 2 + p.lean * 0.5 + (r() - 0.5) * 0.7, len: (0.6 + r() * 0.5) * p.len, d0: 40 + i * 110, tip: l.wi === 0 && i === 0 ? "rose" : null });
     }
-    if (!l.grounded && r() < Math.min(0.95, 0.4 * p.dens)) this.grow(r, E, nid, p, { base: [inX(), -0.1 - r() * 0.35], dir: Math.PI / 2 + (r() - 0.5) * 0.8, len: (0.35 + r() * 0.35) * p.len, d0: 160 });
+    if (r() < Math.min(0.95, 0.4 * p.dens)) this.grow(r, E, nid, p, { base: [inX(), -0.1 - r() * 0.35], dir: Math.PI / 2 + (r() - 0.5) * 0.8, len: (0.35 + r() * 0.35) * p.len, d0: 160 });
     if (l.prev && r() < p.bridgeP) {
       const px = -(this.mw(l.prev.ch) + w) / 2;
       const a = [inX(), -0.05 - r() * 0.55], b = [px + (r() - 0.5) * 0.25, -0.05 - r() * 0.55];
@@ -1284,14 +1257,10 @@ export class Garden {
     s.present(now / 1000);
   }
   paint(now: number, caret: boolean) {
-    const ls = this.surface, st: any = this.state.mode === "flowers" ? this.flowerState() : this.mainState();
-    if (st.noText) caret = false;
+    const ls = this.surface, st: any = this.mainState();
     // flowers behind the type, the type, then flowers in front: the flowers and the type have their own character sizes
     const vf = this.cellScale < VECTOR_BELOW, vt = this.textScale < VECTOR_BELOW; // too small for ASCII = real vector
-    this.pass(ls.back, now, (B) => {
-      if (st.noText) drawScene(B, this.W, this.H, this.scene, this.sceneSeed, now, st.C);
-      this.render(B, now, st, "back");
-    }, vf, true);
+    this.pass(ls.back, now, (B) => this.render(B, now, st, "back"), vf, true);
     this.pass(ls.text, now, (B) => {
       this.render(B, now, st, "text");
       if (caret) {
@@ -1301,7 +1270,6 @@ export class Garden {
     }, vt);
     this.pass(ls.front, now, (B, g) => {
       this.render(B, now, st, "front");
-      if (st.noText) drawScene(B, this.W, this.H, this.scene, this.sceneSeed, now, st.C, true);
       this.drawFlies(B, now, st.C);
       if (caret && this.gifts && this.gifts.length) {
         const LIFE = 60000; this.gifts = this.gifts.filter((gf: any) => now - gf.t0 < LIFE);
@@ -1347,7 +1315,7 @@ export class Garden {
       }
     };
     if (phase === "all" || phase === "back") draw(0);
-    if (!st.noText && (phase === "all" || phase === "text")) for (const l of L) if (l.ch !== " " && (st.textAll || !l.dead)) B.text(l.ch, l.x, l.y, S, st.C.text);
+    if (phase === "all" || phase === "text") for (const l of L) if (l.ch !== " " && (st.textAll || !l.dead)) B.text(l.ch, l.x, l.y, S, st.C.text);
     if (phase === "all" || phase === "front") draw(1);
   }
   wpt(st: any, l: any, x: number, y: number) {
@@ -1377,10 +1345,7 @@ export class Garden {
   drawStem(B: any, e: any, l: any, age: number, kk: number, st: any, f: number, amp: number, layer: number, frO?: number) {
     const S = st.S, fr = frO != null ? frO : this.eo((age - e.d0) / e.dur) * kk; if (fr <= 0) return;
     const j = this.jit(e.id, f, amp);
-    const P = e.pts.map((p: number[], i: number) => {
-      const rootFade = l.grounded ? Math.min(1, i / Math.max(1, e.pts.length - 1) * 4) : 1;
-      return this.wpt(st, l, l.x + p[0] * S + j[0] * rootFade, l.y + p[1] * S + j[1] * rootFade);
-    });
+    const P = e.pts.map((p: number[]) => this.wpt(st, l, l.x + p[0] * S + j[0], l.y + p[1] * S + j[1]));
     for (const sg of e.segs) {
       if (sg.layer !== layer) continue;
       const b = Math.min(sg.u1, fr); if (b <= sg.u0) continue;
