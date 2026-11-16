@@ -341,3 +341,6 @@ kbd {
 
 /* Keep hover feedback stationary. */
 .gh:hover, .chip-pick:hover { transform: none; }
+
+/* Alt+H hides the chrome; Escape restores it. Keep the canvas mounted and animating. */
+.ui-hidden .top-bar, .ui-hidden .dock, .ui-hidden .tweaks, .ui-hidden .tweaks-open, .ui-hidden .gh { display: none !important; }

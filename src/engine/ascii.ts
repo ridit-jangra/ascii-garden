@@ -77,6 +77,11 @@ const RAMP = ".',:;+=";
  * [shadow, base, highlight], so each flower has a texture of its own as well as a colour.
  */
 export const KIND_GLYPHS: Record<string, [string, string, string]> = {
+  sceneCloud: [";:=+", ".:;~", "'`.,"],
+  sceneMountain: ["%#=", ":;+=", ".:'"],
+  sceneRidge: ["%#=", ":;+=", ".:'"],
+  sceneEarth: ["#%x", "/;+=", "\\|/"],
+  sceneSand: ["#%", ":;=", ".:'"],
   tulip: ["HM#%W", "Yy+*=", ".'`:,"],
   daisy: ["@08O", "o*:+.", "'`.,;"],
   poppy: ["&@%#8", "O0o*^", "`'.,:"],
@@ -343,7 +348,8 @@ export class AsciiSurface {
         const cov = total / N;
         const idx = r * cols + c;
         const key = (hash3(c, r, 17) * 4294967295) >>> 0;
-        const roll = hash3(key, Math.floor(t * 2.4 + (key % 997) / 97), 7);
+        // Keep each cell's texture stable; geometry supplies the animation.
+        const roll = hash3(key, 0, 7);
         const base = rr[dom];
         // Pure-black typography stays solid instead of picking up the bright background.
         const blackText = domFam === 4 && base[0] === 0 && base[1] === 0 && base[2] === 0;

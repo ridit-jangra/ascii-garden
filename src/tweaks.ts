@@ -1,3 +1,4 @@
+import { readScene, type SceneOptions } from "./engine/scene";
 /** Everything the Tweaks panel controls, and how it is saved. */
 
 /**
@@ -23,6 +24,7 @@ export interface GardenKnobs {
 export const KNOB_DEFAULTS: GardenKnobs = { chaos: 0.3, boil: true, recoil: 20, detail: 1, textDetail: 1, grid: true };
 
 export interface Saved {
+  scene: SceneOptions;
   palette: number;
   flowers: string[];
   colors: Record<string, string>;
@@ -31,7 +33,7 @@ export interface Saved {
   theme: string;
   /** The words on the garden when you last left, restored fully grown. */
   text: string;
-  mode: "type" | "poster";
+  mode: "type" | "poster" | "flowers";
   poster: { text: string; preset: string; seed: number };
 }
 
@@ -47,15 +49,16 @@ export function loadSaved(all: string[], paletteCount: number): Saved {
   const flowers: string[] = Array.isArray(j.flowers) ? j.flowers.filter((k: string) => all.includes(k)) : all;
   const k = j.knobs || {};
   return {
+    scene: readScene(j.scene),
     palette: Number.isInteger(j.palette) && j.palette >= 0 && j.palette < paletteCount ? j.palette : 0,
     flowers: flowers.length ? flowers : all,
     colors: j.colors && typeof j.colors === "object" ? j.colors : {},
     theme: typeof j.theme === "string" ? j.theme : "botanical",
     text: typeof j.text === "string" ? j.text.slice(0, 200) : "",
-    mode: j.mode === "poster" ? "poster" : "type",
+    mode: j.mode === "flowers" ? "flowers" : j.mode === "poster" ? "poster" : "type",
     poster: {
       text: typeof j.poster?.text === "string" ? j.poster.text.slice(0, 40) : "ASCII Garden",
-      preset: typeof j.poster?.preset === "string" ? j.poster.preset : "breathe",
+      preset: typeof j.poster?.preset === "string" ? j.poster.preset : "wind",
       seed: num(j.poster?.seed, 7, 0, 1e9),
     },
     knobs: {

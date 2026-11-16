@@ -1,3 +1,4 @@
+import { SCENE_DEFAULTS, type SceneOptions } from "./engine/scene";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import gsap from "gsap";
 import { Garden, PAL, PRESETS, FLOWERS, THEMES, THEMES_ENABLED, defaultKindColor, renderKindPreview, type Mode } from "./engine/garden";
@@ -10,7 +11,7 @@ import TweaksPanel, { type Group } from "./components/TweaksPanel";
 import { GLASS, KNOB_DEFAULTS, MIN_CELL, OPEN_KEY, loadSaved, save } from "./tweaks";
 
 const ALL = FLOWERS.map((f) => f.id);
-const MODES = [{ value: "type", label: "Type" }, { value: "poster", label: "Poster" }];
+const MODES = [{ value: "type", label: "Type" }, { value: "poster", label: "Poster" }, { value: "flowers", label: "Flowers" }];
 
 const CHAOS_STEPS: [number, string][] = [
   [0.12, "minimal botanical"], [0.35, "tended"], [0.6, "wild"], [0.85, "overgrown"], [1.01, "THE GARDEN HAS TAKEN OVER"],
@@ -77,6 +78,17 @@ export default function App() {
   const initTheme = (THEMES_ENABLED && THEMES.find((t) => t.id === saved.theme)) || THEMES[0];
   const initFlowers = (() => { const f = saved.flowers.filter((k) => initTheme.kinds.includes(k)); return f.length ? f : initTheme.kinds; })();
 
+  const [scene, setScene] = useState(saved.scene);
+  const setSceneOption = <K extends keyof SceneOptions>(key: K, value: SceneOptions[K]) => setScene((o) => ({ ...o, [key]: value }));
+  const [uiHidden, setUiHidden] = useState(false);
+  useEffect(() => {
+    const key = (e: KeyboardEvent) => {
+      if (e.altKey && e.code === "KeyH") { e.preventDefault(); setUiHidden((v) => !v); }
+      if (e.key === "Escape") setUiHidden(false);
+    };
+    window.addEventListener("keydown", key);
+    return () => window.removeEventListener("keydown", key);
+  }, []);
   const [mode, setMode] = useState<Mode>(saved.mode);
   const [typed, setTyped] = useState(saved.text);
   const [palette, setPalette] = useState(saved.palette);
@@ -85,7 +97,7 @@ export default function App() {
   const themeObj = THEMES.find((t) => t.id === theme) ?? THEMES[0];
   const [colors, setColors] = useState<Record<string, string>>(saved.colors);
   const [knobs, setKnobs] = useState(saved.knobs);
-  const [preset, setPreset] = useState(PRESETS.some((x) => x.id === saved.poster.preset) ? saved.poster.preset : "breathe");
+  const [preset, setPreset] = useState(PRESETS.some((x) => x.id === saved.poster.preset) ? saved.poster.preset : "wind");
   const [pText, setPText] = useState(saved.poster.text);
   const [seed, setSeed] = useState(saved.poster.seed);
   const [busy, setBusy] = useState(false);
@@ -141,6 +153,8 @@ export default function App() {
     r.setProperty("--edge", String(GLASS.edge));
   }, []);
 
+  useEffect(() => { garden.current?.setScene(scene); }, [scene]);
+
   // knobs and choices flow into the engine
   useEffect(() => { garden.current?.setPalette(palette); }, [palette]);
   useEffect(() => { garden.current?.setKindColors(colors); }, [colors]);
@@ -150,8 +164,8 @@ export default function App() {
   useEffect(() => { garden.current?.setCellScale(knobs.detail); }, [knobs.detail]);
   useEffect(() => { garden.current?.setTextScale(knobs.textDetail); }, [knobs.textDetail]);
   useEffect(() => {
-    save({ palette, theme, flowers, colors, knobs, text: typed, mode, poster: { text: pText, preset, seed } });
-  }, [palette, theme, flowers, colors, knobs, typed, mode, pText, preset, seed]);
+    save({ scene, palette, theme, flowers, colors, knobs, text: typed, mode, poster: { text: pText, preset, seed } });
+  }, [scene, palette, theme, flowers, colors, knobs, typed, mode, pText, preset, seed]);
 
   // chaos: the engine follows the slider at once; what is on screen regrows shortly after you stop moving it
   const firstChaos = useRef(true);
@@ -186,7 +200,7 @@ export default function App() {
     const g = garden.current; if (!g) return;
     g.setFlowers(next);
     // live: flowers already on screen swap to the new mix and bloom again
-    if (mode === "poster") g.setPoster({ text: pText, preset, seed }); else { g.rekind(); g.refocus(); }
+    if (mode === "poster") g.setPoster({ text: pText, preset, seed }); else if (mode === "flowers") g.regenerateFlowers(); else { g.rekind(); g.refocus(); }
   };
   const toggleFlower = (id: string) => applyFlowers(flowers.includes(id) ? flowers.filter((k) => k !== id) : [...flowers, id]);
 
@@ -242,7 +256,7 @@ export default function App() {
   );
 
   const resetAll = () => {
-    setPalette(0); setColors({}); setKnobs(KNOB_DEFAULTS); changeTheme("botanical");
+    setScene({ ...SCENE_DEFAULTS }); setPalette(0); setColors({}); setKnobs(KNOB_DEFAULTS); changeTheme("botanical");
   };
 
   // GSAP: glass chrome slides in
@@ -271,14 +285,31 @@ export default function App() {
       ),
     }]]);
   }
+  if (mode === "flowers") {
+    const choices = <K extends "terrain">(key: K, options: [SceneOptions[K], string][]) => (
+      <div className="theme-seg" role="group" aria-label={key}>
+        {options.map(([value, label]) => <button key={value} type="button" className={"tool" + (scene[key] === value ? " on" : "")} aria-pressed={scene[key] === value} onClick={() => setSceneOption(key, value)}>{label}</button>)}
+      </div>
+    );
+    groups.push(["Scene", [
+      { kind: "node", key: "meadow-preset", node: <button type="button" className="tool" onClick={() => { setScene({ ...SCENE_DEFAULTS, terrain: "grassland", mountains: false, height: 0.6, relief: 0.25, cloudCount: 3 }); setPalette(PAL.findIndex((p) => p[0] === "Blue meadow")); }}>Cloud meadow</button> },
+      { kind: "node", key: "terrain", node: choices("terrain", [["meadow", "Meadow"], ["grassland", "Windy grass"], ["hills", "Hills"], ["dunes", "Dunes"], ["rocky", "Rocky"]]) },
+      { kind: "range", key: "height", label: "Ground level", min: 0.6, max: 0.86, step: 0.01, def: SCENE_DEFAULTS.height, value: scene.height, set: (v) => setSceneOption("height", v), hint: "Move the ground up and down." },
+      { kind: "range", key: "relief", label: "Terrain relief", min: 0, max: 1, step: 0.01, def: SCENE_DEFAULTS.relief, value: scene.relief, set: (v) => setSceneOption("relief", v), hint: "Shape the slopes and contours of the land." },
+      { kind: "toggle", key: "clouds", label: "Clouds", def: SCENE_DEFAULTS.clouds, value: scene.clouds, set: (v) => setSceneOption("clouds", v), hint: "Slowly drifting ASCII clouds." },
+      ...(scene.clouds ? [{ kind: "range" as const, key: "cloudCount", label: "Cloud amount", min: 1, max: 8, step: 1, def: SCENE_DEFAULTS.cloudCount, value: scene.cloudCount, set: (v: number) => setSceneOption("cloudCount", v), hint: "How many clouds drift across the sky." }] : []),
+      { kind: "toggle", key: "mountains", label: "Mountains", def: SCENE_DEFAULTS.mountains, value: scene.mountains, set: (v) => setSceneOption("mountains", v), hint: "Layered ASCII peaks behind the flowers." },
+      ...(scene.mountains ? [{ kind: "range" as const, key: "mountainHeight", label: "Peak height", min: 0.1, max: 1, step: 0.01, def: SCENE_DEFAULTS.mountainHeight, value: scene.mountainHeight, set: (v: number) => setSceneOption("mountainHeight", v), hint: "From distant foothills to tall mountain peaks." }] : []),
+    ]]);
+  }
   groups.push(["Garden", [
     ...(THEMES_ENABLED ? [{ kind: "node" as const, key: "theme", node: <ThemeSwitch value={theme} onChange={changeTheme} /> }] : []),
     { kind: "range", key: "chaos", label: "Chaos", min: 0, max: 1, step: 0.01, def: KNOB_DEFAULTS.chaos, value: knobs.chaos, set: (v) => setKnob("chaos", v), hint: "From minimal botanical typography to the garden taking over: stems, branches, flower size and leaves all grow with it." },
     { kind: "node", key: "chaos-cap", node: <ChaosCaption value={knobs.chaos} /> },
     { kind: "range", key: "detail", label: "Flower cell size", min: MIN_CELL, max: 1.8, step: 0.05, def: KNOB_DEFAULTS.detail, value: knobs.detail, set: (v) => setKnob("detail", v), hint: "Size of the characters the flowers are made of. Lower is finer and more detailed, higher is chunkier." },
-    { kind: "range", key: "textDetail", label: "Text cell size", min: MIN_CELL, max: 1.8, step: 0.05, def: KNOB_DEFAULTS.textDetail, value: knobs.textDetail, set: (v) => setKnob("textDetail", v), hint: "Size of the characters the letters are made of, set separately from the flowers." },
-    { kind: "range", key: "recoil", label: "Recoil", min: 0, max: 80, step: 1, def: KNOB_DEFAULTS.recoil, value: knobs.recoil, set: (v) => setKnob("recoil", v), hint: "How far a stem snaps back when you cut it with space." },
-    { kind: "toggle", key: "boil", label: "Boil", def: KNOB_DEFAULTS.boil, value: knobs.boil, set: (v) => setKnob("boil", v), hint: "Hand-drawn jitter on every stem and flower." },
+    ...(mode !== "flowers" ? [{ kind: "range" as const, key: "textDetail", label: "Text cell size", min: MIN_CELL, max: 1.8, step: 0.05, def: KNOB_DEFAULTS.textDetail, value: knobs.textDetail, set: (v) => setKnob("textDetail", v), hint: "Size of the characters the letters are made of, set separately from the flowers." }] : []),
+    { kind: "range", key: "recoil", label: "Recoil", min: 0, max: 80, step: 1, def: KNOB_DEFAULTS.recoil, value: knobs.recoil, set: (v) => setKnob("recoil", v), hint: "How far a stem eases back when you cut it with space." },
+    { kind: "toggle", key: "boil", label: "Boil", def: KNOB_DEFAULTS.boil, value: knobs.boil, set: (v) => setKnob("boil", v), hint: "Smooth hand-drawn movement on every stem and flower." },
     { kind: "toggle", key: "grid", label: "Cell grid", def: KNOB_DEFAULTS.grid, value: knobs.grid, set: (v) => setKnob("grid", v), hint: "Faint grid lines behind the characters." },
   ]]);
   groups.push([themeObj.group, [{
@@ -309,7 +340,7 @@ export default function App() {
       </div>
     ),
   }]]);
-  const exportJSON = () => JSON.stringify({ palette: row[0], flowers, colors, knobs }, null, 2);
+  const exportJSON = () => JSON.stringify({ palette: row[0], flowers, colors, knobs, scene }, null, 2);
   const stop = (e: React.PointerEvent) => e.stopPropagation();
 
   const menuItem = (title: string, sub: string, onClick: () => void) => (
@@ -345,13 +376,13 @@ export default function App() {
     <>
       <LiquidGlassFilter refraction={GLASS.refraction} ripple={GLASS.ripple} />
       <div
-        className="app"
+        className={"app" + (uiHidden ? " ui-hidden" : "")}
         data-tg="app"
-        style={{ background: bg, ["--accent" as any]: accent, ["--panel" as any]: panelOpen ? "300px" : "0px" }}
+        style={{ background: bg, ["--accent" as any]: accent, ["--panel" as any]: panelOpen && !uiHidden ? "300px" : "0px" }}
         onPointerDown={(e) => garden.current?.appPointerDown(e)}
         onClick={(e) => garden.current?.appClick(e)}
       >
-        <canvas ref={canvasRef} className="garden" style={{ display: mode === "type" ? "block" : "none" }} />
+        <canvas ref={canvasRef} className="garden" style={{ display: mode !== "poster" ? "block" : "none" }} />
         <input
           ref={inputRef}
           className="hidden-input"
@@ -375,7 +406,7 @@ export default function App() {
           </svg>
         </a>
 
-        <div className="top-bar fx-in" onPointerDown={stop}>
+        <div className="top-bar fx-in" title="Alt+H: hide/show UI · Esc: show UI" onPointerDown={stop}>
           <GlassChoices options={MODES} value={mode} onChange={(v) => goMode(v as Mode)} label="Mode" />
         </div>
 
@@ -386,7 +417,14 @@ export default function App() {
           onPointerDown={stop}
           style={{ borderRadius: GLASS.radius, ["--blur" as any]: `${GLASS.blur}px` }}
         >
-          {mode === "type" ? (
+          {mode === "flowers" ? (
+            <>
+              <span className="status">Flowers only</span>
+              <div className="actions">
+                <button type="button" className="pill primary" onClick={() => garden.current?.regenerateFlowers()}>Regenerate</button>
+              </div>
+            </>
+          ) : mode === "type" ? (
             <>
               {busy ? (
                 <span className="status">{status}</span>
