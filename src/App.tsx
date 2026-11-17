@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { Analytics } from '@vercel/analytics/react';
 import gsap from "gsap";
 import { Garden, PAL, PRESETS, FLOWERS, THEMES, THEMES_ENABLED, defaultKindColor, renderKindPreview, type Mode } from "./engine/garden";
 import CodeExport from "./export/CodeExport";
@@ -433,6 +434,7 @@ export default function App() {
       </div>
 
       <CodeExport open={exportOpen} onClose={closeExport} base={exportBase} />
+      <Analytics />
     </>
   );
 }
